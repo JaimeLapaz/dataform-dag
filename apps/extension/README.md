@@ -4,7 +4,7 @@ Explore your [Dataform](https://cloud.google.com/dataform) project's dependency 
 right inside VS Code. The graph is parsed locally from your `.sqlx` files — **no `dataform compile`,
 no warehouse connection, no cloud.**
 
-<img width="3374" height="1372" alt="image" src="https://github.com/user-attachments/assets/3d1dfb01-788e-4384-9f75-b36057dc909a" />
+<img alt="image" src="https://github.com/user-attachments/assets/3d1dfb01-788e-4384-9f75-b36057dc909a" />
 
 ## Features
 
