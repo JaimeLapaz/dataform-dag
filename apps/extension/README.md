@@ -1,28 +1,45 @@
-# Dataform DAG — VS Code extension
+# 🔀 dataform-dag
 
-VS Code host for the dataform-dag viewer. Renders the shared `@dataform-dag/ui` canvas inside a
-webview and backs it with the `HostBridge` contract over the workspace filesystem.
+Explore your [Dataform](https://cloud.google.com/dataform) project's dependency graph as an interactive diagram,
+right inside VS Code. The graph is parsed locally from your `.sqlx` files — **no `dataform compile`,
+no warehouse connection, no cloud.**
 
-What the host wires up:
+![The Dataform DAG viewer rendering a project's dependency graph inside a VS Code webview, with a color-coded legend by node type and a minimap.](screenshot.png)
 
-- **graph** — built from the open folder's `definitions/**/*.sqlx` via the core regex parser
-  (`buildGraphFromWorkspace` + `NodeFileSource`), no `dataform compile` needed.
-- **openFile** — clicking "Go to file" opens the node's `.sqlx` in an editor.
-- **liveWatch** — a `**/*.sqlx` file watcher rebuilds and repushes the graph on any change.
-- **focusOnActive** — switching the active editor to a modeled file focuses its node.
+## Features
 
-## Run it (Extension Development Host)
+- **See the whole graph at a glance.** Every model, source, view, and assertion in your project,
+  laid out left-to-right by dependency with a color-coded legend and a minimap for large projects.
+- **Jump straight to the code.** Click a node to open its `.sqlx` file in the editor.
+- **Follow along as you navigate.** Switch the active editor to a modeled file and its node is
+  highlighted on the canvas.
+- **Live updates.** Edit and save any `.sqlx` and the graph rebuilds automatically — no refresh.
+- **Fast and offline.** Parses `.sqlx` directly, so it works even on a project that doesn't compile.
 
-1. From the workspace root: `npm install && npm run build:core`
-2. Open **this folder** (`apps/extension`) in VS Code.
-3. Press **F5** (`Run Dataform DAG Extension`). The `preLaunchTask` runs `npm run build` (esbuild
-   bundles `dist/extension.js` + the webview `dist/webview.js`/`.css`).
-4. In the new window, open a Dataform project (e.g. the `airfare-drift` repo root), then run
-   **Dataform DAG: Show Graph** from the Command Palette.
+## Getting started
 
-## Build notes
+1. Open a Dataform project folder in VS Code (one with a `definitions/**/*.sqlx` tree).
+2. Open the Command Palette (`Cmd`/`Ctrl` + `Shift` + `P`) and run **Dataform DAG: Show Graph**.
+3. The graph opens in a new panel. Click any node to open its file; edit and save to see it update.
 
-`build.mjs` produces two esbuild bundles: the Node extension (CJS, `vscode` external) and the webview
-UI as a single IIFE. The webview is intentionally **not** code-split so the lazy `import("elkjs")` in
-the shared UI is inlined into the one nonce'd script — a separate chunk would be blocked by the
-webview CSP and the layout would silently never run.
+## Node types
+
+The legend across the top color-codes each node by its Dataform type:
+
+**source** · **table** · **view** · **incremental** · **assertion** · **operations**
+
+## Requirements
+
+- VS Code `1.90.0` or newer.
+- A Dataform project with a `definitions/` folder of `.sqlx` files.
+
+## Notes
+
+The graph is built by parsing `.sqlx` text directly, which is what keeps it fast and dependency-free.
+As a result, assertions declared inline in a model's `config` block are folded into that model rather
+than shown as separate nodes, and a `ref()` inside a commented-out line of SQL is still counted as a
+dependency. For most projects the parsed graph matches the compiled one node-for-node.
+
+---
+
+Source and contribution guide: [github.com/cadamsmith/dataform-dag](https://github.com/cadamsmith/dataform-dag)

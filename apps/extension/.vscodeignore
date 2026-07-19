@@ -14,6 +14,9 @@ vitest.config.ts
 # Dependencies — the bundle is self-contained; packaged with `vsce package --no-dependencies`
 node_modules/**
 
+# macOS Finder cruft
+**/.DS_Store
+
 # Build artifacts we don't ship
 **/*.ts
 **/*.tsbuildinfo
