@@ -1,4 +1,4 @@
-# dataform-dag
+# 🔀 dataform-dag
 
 Interactive DAG viewer for a Dataform project's dependency graph — parsed locally from `.sqlx`
 files, no cloud connection required. Ships as **one shared core + one shared UI behind two hosts**:
