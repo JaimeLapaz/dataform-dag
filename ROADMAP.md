@@ -12,10 +12,11 @@ Working notes for whoever (human or Claude) picks this up next. Read `README.md`
 - `packages/ui` — host-agnostic React Flow + ELK canvas, `HostBridge` seam, node detail, focus
   highlighting. Runs standalone via `npm run dev:ui` against a mock graph. 13 tests.
 - `apps/extension` — VS Code webview host. esbuild bundles the Node extension + a single webview IIFE.
-  `GraphController` implements the host side (build / openFile / liveWatch / focus). 3 tests.
+  `GraphController` implements the host side (build / openFile / liveWatch / focus). 17 tests
+  (`GraphController` covered via an aliased `vscode` stub — see `test/mocks/vscode.ts`).
 - `apps/web` — browser host over the File System Access API (Chromium only). 3 tests.
 
-`npm install && npm run build:core && npm test` → **40 tests pass, typecheck clean, both hosts build.**
+`npm install && npm run build:core && npm test` → **54 tests pass, typecheck clean, both hosts build.**
 
 ### Verified vs. NOT verified
 
@@ -35,9 +36,12 @@ Until someone does these two, "renders correctly" is asserted from build success
    `npm run typecheck` → `npm test` on push/PR. Fastest high-value win.
 2. **Push the import commit.** The initial code-import commit is **local-only** — not yet pushed to
    `origin` (github.com/cadamsmith/dataform-dag). Confirm with the user before pushing.
-3. **Test `apps/extension/src/extension.ts`.** The `GraphController` (buildAndPost / focusActive /
-   message routing / watcher wiring) is the most logic-heavy new code and has **zero coverage** — the
-   bridge tests only cover the thin postMessage plumbing. Mock the `vscode` module and cover it.
+3. **~~Test `apps/extension/src/extension.ts`.~~ DONE (2026-07-19).** `GraphController` (buildAndPost /
+   focusActive / message routing / watcher wiring) is now covered by 14 tests in
+   `test/GraphController.test.ts`. The `vscode` module is aliased to a hand-rolled stub
+   (`test/mocks/vscode.ts`) via `vitest.config.ts` — it can't be `vi.mock`'d directly because it isn't
+   an installed package (only `@types/vscode`); Vitest resolves the specifier before the factory runs.
+   Core is mocked so the tests exercise orchestration, not core.
 4. **Package the extension as a `.vsix`.** Manifest polish (real `publisher`, icon, `categories`,
    `galleryBanner`), a `.vscodeignore`, `vsce package`. Then optionally publish to the Marketplace /
    Open VSX. (Current `publisher: "dataform-dag"` is a placeholder.)
