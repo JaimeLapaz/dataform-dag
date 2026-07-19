@@ -1,4 +1,4 @@
-# @dataform-dag/extension
+# Dataform DAG — VS Code extension
 
 VS Code host for the dataform-dag viewer. Renders the shared `@dataform-dag/ui` canvas inside a
 webview and backs it with the `HostBridge` contract over the workspace filesystem.

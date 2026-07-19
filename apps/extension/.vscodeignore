@@ -1,0 +1,22 @@
+# Everything ships pre-bundled in dist/ (esbuild). The vsix needs no node_modules and
+# no source — only the built extension + webview, the manifest, README, LICENSE, and icon.
+
+# Source & config (not needed at runtime)
+src/**
+webview/**
+test/**
+build.mjs
+tsconfig.json
+vitest.config.ts
+.vscode/**
+.gitignore
+
+# Dependencies — the bundle is self-contained; packaged with `vsce package --no-dependencies`
+node_modules/**
+
+# Build artifacts we don't ship
+**/*.ts
+**/*.tsbuildinfo
+dist/**/*.map
+
+# Icon source lives in the repo, not the package (the rendered icon.png is kept)

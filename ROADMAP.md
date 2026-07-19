@@ -42,9 +42,19 @@ Until someone does these two, "renders correctly" is asserted from build success
    (`test/mocks/vscode.ts`) via `vitest.config.ts` — it can't be `vi.mock`'d directly because it isn't
    an installed package (only `@types/vscode`); Vitest resolves the specifier before the factory runs.
    Core is mocked so the tests exercise orchestration, not core.
-4. **Package the extension as a `.vsix`.** Manifest polish (real `publisher`, icon, `categories`,
-   `galleryBanner`), a `.vscodeignore`, `vsce package`. Then optionally publish to the Marketplace /
-   Open VSX. (Current `publisher: "dataform-dag"` is a placeholder.)
+4. **~~Package the extension as a `.vsix`.~~ DONE (2026-07-19).** `npm run package` in `apps/extension`
+   runs `vsce package --no-dependencies` and produces `dataform-dag-0.1.0.vsix` (~747 KB). Manifest
+   polished: `name` unscoped to `dataform-dag` (vsce rejects the `@scope/name` form → extension id is
+   now `cadamsmith.dataform-dag`), real `publisher: cadamsmith`, `icon.png` (a rendered DAG glyph),
+   `repository`/`bugs`/`homepage`/`keywords`/`galleryBanner`/`license`, version `0.1.0`. `LICENSE` is
+   copied into the package dir (vsce looks there, not the monorepo root). `.vscodeignore` ships only
+   `dist/` + manifest + README + LICENSE + icon — no `src/`, `test/`, `node_modules/`, or `.map`s
+   (verified by `unzip -l`). `--no-dependencies` is correct because everything is esbuild-bundled, so
+   the vsix needs zero `node_modules` (sidesteps the `*`-workspace-dep trap). `vscode:prepublish`
+   rebuilds core (`--prefix ../../packages/core`) then the extension. **NOT verified by machine:**
+   installing the `.vsix` into a real VS Code (`code --install-extension …`) and confirming it renders
+   — same human smoke test the MVP section flags. **Publishing is intentionally NOT done** (needs a
+   registered Marketplace publisher + a PAT — the user's credentialed step).
 5. **Web host is local-only — NOT deployed anywhere, and there are no plans to.** It's a static bundle
    (`npm run build -w @dataform-dag/web`) run locally via `npm run dev -w @dataform-dag/web`; it exists
    for local use and as the standalone proving ground for the shared UI. Don't wire up GitHub Pages /
