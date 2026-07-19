@@ -1,0 +1,21 @@
+config {
+  type: "assertion",
+  tags: ["assertion", "monitoring"],
+  description: "FRESHNESS backstop — the continuous-accumulation guarantee (constraint #4). Fails when no VALID fetch has landed recently, i.e. the ingestion pipeline has silently stopped writing. Uses is_valid_fetch (not just any row) so it distinguishes 'run never fired' from 'run fired but every fetch failed' — a partition full of error rows is still stale for modeling. Complements the per-call error isolation + Scheduler retries: those keep one run resilient; this detects a run that stopped happening at all."
+}
+
+-- Cadence is `0 9 */2 * *` (every 2 days), and Scheduler retries a transient
+-- failure the same day, so a healthy pipeline always has a valid fetch within
+-- ~2 days. >3 days stale means a full cycle (fire + all retries) was missed —
+-- the alarm point. Returns a row ONLY when stale, which fails the assertion.
+WITH latest AS (
+  SELECT MAX(snapshot_date) AS last_valid_snapshot
+  FROM ${ref("stg_fare_snapshots")}
+  WHERE is_valid_fetch
+)
+SELECT
+  last_valid_snapshot,
+  DATE_DIFF(CURRENT_DATE(), last_valid_snapshot, DAY) AS days_since_valid_fetch
+FROM latest
+WHERE last_valid_snapshot IS NULL
+   OR DATE_DIFF(CURRENT_DATE(), last_valid_snapshot, DAY) > 3

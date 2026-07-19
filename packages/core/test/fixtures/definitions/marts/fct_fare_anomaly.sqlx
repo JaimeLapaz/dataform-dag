@@ -1,0 +1,125 @@
+config {
+  type: "table",
+  tags: ["marts", "anomaly"],
+  schema: "airfare_marts",
+  description: "THE differentiator: the residual of each observed cheapest fare vs its fitted expectation, z-scored. Grain: one row per DEFAULT-STAY trip-observation (snapshot_date × outbound_date × return_date). Expected fare = the JOINT (lead_bucket × month) cell mean (conditions on lead AND season simultaneously, so it's free of the lead/month collinearity that biases an additive marginal surface), computed LEAVE-ONE-OUT from the cell's sufficient statistics so a point never scores against itself. z_score is raw-dollar (interpretable); z_score_log is the log-space robustness cross-check (fares are heavy-tailed).\n\nRecomputed in full each run (type: table, not incremental): every observation re-scores against the current baseline, so early scores are never left stale as cells fill — correctness over an as-of incremental variant (a future operational 'would we have flagged it live' extension). Small (one thin route), and materialized for cheap consumer reads (constraint #5).\n\nMATURITY: is_anomaly fires only when the cell is reliable by DISTINCT ANCHORS (independent trips) — not observation count, which the re-observing panel inflates. Today almost every cell is anchor-sparse, so this is honestly ~all 'insufficient_data'; it lights up as the panel accumulates. CAVEAT: within a cell, repeated re-observations of one anchor are autocorrelated, so loo_std under-states true dispersion (the anchor gate prevents unreliable cells from flagging but does not de-bias loo_std) — the fuller fix (one observation per anchor per cell) trades against the snapshot-partitioned idempotency and is deferred.\n\nCONSUMER NOTE: because every re-observation is scored, one anchor's anomaly episode spans many rows — dedup to anchor-episodes before counting 'how many anomalies', or correlated rows multi-count.",
+  bigquery: {
+    partitionBy: "snapshot_date",
+    clusterBy: ["is_anomaly", "lead_bucket_min", "departure_month"]
+  },
+  assertions: {
+    // type: table has no MERGE/uniqueKey, so this assertion is the ONLY dup guard
+    // on the centerpiece fact (safe today — both joins hit GROUP BY'd cell keys).
+    uniqueKey: ["snapshot_date", "outbound_date", "return_date"]
+  }
+}
+
+WITH obs AS (
+  SELECT
+    snapshot_date, outbound_date, return_date,
+    days_to_departure, lead_bucket_min, departure_month, stay_length_days,
+    CAST(cheapest_fare AS FLOAT64) AS fare
+  FROM ${ref("int_trip_fares")}
+  WHERE lead_bucket_min IS NOT NULL
+    AND stay_length_days = ${dataform.projectConfig.vars.default_stay_days}
+),
+
+-- Joint-cell sufficient stats (additive rollup) + the non-additive independent
+-- sample count (distinct anchors) computed straight from the trip grain.
+cell_moments AS (
+  SELECT
+    lead_bucket_min, departure_month,
+    SUM(n_observations) AS cell_n,
+    SUM(sum_fare) AS s, SUM(sum_sq_fare) AS q,
+    SUM(sum_ln_fare) AS s_ln, SUM(sum_sq_ln_fare) AS q_ln
+  FROM ${ref("int_daily_fare_stats")}
+  GROUP BY lead_bucket_min, departure_month
+),
+cell_anchors AS (
+  SELECT
+    lead_bucket_min, departure_month,
+    COUNT(DISTINCT outbound_date) AS n_distinct_anchors
+  FROM ${ref("int_trip_fares")}
+  WHERE lead_bucket_min IS NOT NULL
+    AND stay_length_days = ${dataform.projectConfig.vars.default_stay_days}
+  GROUP BY lead_bucket_min, departure_month
+),
+
+-- Leave-one-out moments from sufficient stats: remove this observation from its
+-- cell so it can't inflate its own expectation. SAFE_DIVIDE throughout so the
+-- low-N rows (which get gated out) yield NULL rather than a divide-by-zero error.
+scored AS (
+  SELECT
+    o.*,
+    m.cell_n,
+    COALESCE(a.n_distinct_anchors, 0) AS n_distinct_anchors,
+    -- raw-space LOO
+    SAFE_DIVIDE(m.s - o.fare, m.cell_n - 1) AS loo_mean,
+    SQRT(GREATEST(0.0, SAFE_DIVIDE(
+      (m.q - POW(o.fare, 2)) - SAFE_DIVIDE(POW(m.s - o.fare, 2), m.cell_n - 1),
+      m.cell_n - 2
+    ))) AS loo_std,
+    -- log-space LOO
+    SAFE_DIVIDE(m.s_ln - LN(o.fare), m.cell_n - 1) AS loo_mean_ln,
+    SQRT(GREATEST(0.0, SAFE_DIVIDE(
+      (m.q_ln - POW(LN(o.fare), 2)) - SAFE_DIVIDE(POW(m.s_ln - LN(o.fare), 2), m.cell_n - 1),
+      m.cell_n - 2
+    ))) AS loo_std_ln
+  FROM obs o
+  JOIN cell_moments m USING (lead_bucket_min, departure_month)
+  LEFT JOIN cell_anchors a USING (lead_bucket_min, departure_month)
+),
+
+flagged AS (
+  SELECT
+    *,
+    -- a z is only meaningful with enough observations AND >1 independent anchor
+    -- AND a non-degenerate spread
+    (cell_n >= ${anomaly.MIN_OBS_FOR_Z}
+     AND n_distinct_anchors >= ${anomaly.MIN_ANCHORS_FOR_Z}
+     AND loo_std IS NOT NULL AND loo_std > 0) AS can_score,
+    (n_distinct_anchors >= ${anomaly.MIN_RELIABLE_ANCHORS}) AS cell_is_reliable
+  FROM scored
+)
+
+SELECT
+  snapshot_date,
+  outbound_date,
+  return_date,
+  days_to_departure,
+  lead_bucket_min,
+  ${lead_time.labelFromMin("lead_bucket_min")} AS lead_time_bucket,
+  departure_month,
+  stay_length_days,
+
+  ROUND(fare, 2) AS observed_fare,
+  ROUND(IF(can_score, loo_mean, NULL), 2) AS expected_fare,
+  ROUND(IF(can_score, fare - loo_mean, NULL), 2) AS residual_usd,
+
+  IF(can_score, ROUND(SAFE_DIVIDE(fare - loo_mean, loo_std), 3), NULL) AS z_score,
+  IF(can_score, ROUND(SAFE_DIVIDE(LN(fare) - loo_mean_ln, loo_std_ln), 3), NULL) AS z_score_log,
+
+  cell_n AS n_observations,
+  n_distinct_anchors,
+  cell_is_reliable,
+
+  COALESCE(
+    can_score
+    AND cell_is_reliable
+    AND ABS(SAFE_DIVIDE(fare - loo_mean, loo_std)) >= ${anomaly.Z_THRESHOLD},
+    FALSE
+  ) AS is_anomaly,
+
+  CASE
+    WHEN can_score
+         AND cell_is_reliable
+         AND ABS(SAFE_DIVIDE(fare - loo_mean, loo_std)) >= ${anomaly.Z_THRESHOLD}
+    THEN IF(fare > loo_mean, 'high', 'low')
+  END AS anomaly_direction,
+
+  CASE
+    WHEN NOT can_score THEN 'insufficient_data'
+    WHEN NOT cell_is_reliable THEN 'scored_unreliable'
+    ELSE 'scored'
+  END AS score_status
+FROM flagged

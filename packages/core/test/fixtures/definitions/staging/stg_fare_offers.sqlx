@@ -1,0 +1,93 @@
+config {
+  type: "incremental",
+  tags: ["staging"],
+  schema: "airfare_staging",
+  description: "Tidy offer×leg rows — the deeply-nested raw_response flattened (grain: snapshot × offer × leg). best_flights and other_flights are unioned with an offer_list label; each offer's flights array is unnested to legs. STRUCTURAL ONLY: unnest, cast, standardize codes/timestamps. Analytical derivations (days_to_departure, stop count, routing/hub, dispersion) belong in intermediate, per constraint #3. Reads only valid fetches from stg_fare_snapshots. Incremental by snapshot_date.",
+  uniqueKey: ["snapshot_date", "outbound_date", "return_date", "offer_list", "offer_index", "leg_index"],
+  bigquery: {
+    partitionBy: "snapshot_date",
+    clusterBy: ["origin", "destination", "offer_list"]
+    // No updatePartitionFilter — see stg_fare_snapshots for the rationale (a
+    // fixed window can drift below the source watermark after a gap → dup inserts).
+  },
+  assertions: {
+    uniqueKey: ["snapshot_date", "outbound_date", "return_date", "offer_list", "offer_index", "leg_index"]
+  }
+}
+
+WITH valid_snapshots AS (
+  SELECT
+    snapshot_date,
+    captured_at,
+    origin,
+    destination,
+    outbound_date,
+    return_date,
+    currency,
+    payload
+  FROM ${ref("stg_fare_snapshots")}
+  WHERE is_valid_fetch
+  -- `>=` reprocesses the boundary partition (idempotent via MERGE + uniqueKey),
+  -- so late/retried snapshots that reached staging after a same-day run still flow through.
+  ${when(incremental(),
+    `AND snapshot_date >= (SELECT MAX(snapshot_date) FROM ${self()})`)}
+),
+
+offers AS (
+  SELECT
+    s.snapshot_date,
+    s.captured_at,
+    s.origin,
+    s.destination,
+    s.outbound_date,
+    s.return_date,
+    s.currency,
+    src.offer_list,
+    offer_index,
+    offer,
+    ARRAY_LENGTH(JSON_QUERY_ARRAY(offer, '$.flights')) AS n_legs
+  FROM valid_snapshots AS s,
+  -- Union best_flights + other_flights, tagging which list each came from.
+  UNNEST([
+    STRUCT('best'  AS offer_list, JSON_QUERY_ARRAY(s.payload, '$.best_flights')  AS arr),
+    STRUCT('other' AS offer_list, JSON_QUERY_ARRAY(s.payload, '$.other_flights') AS arr)
+  ]) AS src,
+  UNNEST(src.arr) AS offer WITH OFFSET AS offer_index
+)
+
+SELECT
+  o.snapshot_date,
+  o.captured_at,
+  o.origin,
+  o.destination,
+  o.outbound_date,
+  o.return_date,
+  o.currency,
+  o.offer_list,
+  o.offer_index,
+  o.n_legs,
+  leg_index,
+
+  -- Offer-level (repeated per leg — the offer is the round-trip itinerary).
+  SAFE_CAST(JSON_VALUE(o.offer, '$.price') AS INT64) AS offer_price,
+  JSON_VALUE(o.offer, '$.type') AS offer_type,
+  SAFE_CAST(JSON_VALUE(o.offer, '$.total_duration') AS INT64) AS total_duration_min,
+  SAFE_CAST(JSON_VALUE(o.offer, '$.carbon_emissions.this_flight') AS INT64) AS carbon_emissions_g,
+  ARRAY_LENGTH(JSON_QUERY_ARRAY(o.offer, '$.layovers')) AS n_layovers,
+  JSON_VALUE(o.offer, '$.departure_token') AS departure_token,
+
+  -- Leg-level.
+  UPPER(JSON_VALUE(leg, '$.departure_airport.id')) AS leg_departure_airport,
+  JSON_VALUE(leg, '$.departure_airport.name') AS leg_departure_airport_name,
+  SAFE.PARSE_DATETIME('%Y-%m-%d %H:%M', JSON_VALUE(leg, '$.departure_airport.time')) AS leg_departure_time,
+  UPPER(JSON_VALUE(leg, '$.arrival_airport.id')) AS leg_arrival_airport,
+  JSON_VALUE(leg, '$.arrival_airport.name') AS leg_arrival_airport_name,
+  SAFE.PARSE_DATETIME('%Y-%m-%d %H:%M', JSON_VALUE(leg, '$.arrival_airport.time')) AS leg_arrival_time,
+  SAFE_CAST(JSON_VALUE(leg, '$.duration') AS INT64) AS leg_duration_min,
+  JSON_VALUE(leg, '$.airline') AS leg_airline,
+  JSON_VALUE(leg, '$.flight_number') AS leg_flight_number,
+  JSON_VALUE(leg, '$.airplane') AS leg_airplane,
+  JSON_VALUE(leg, '$.travel_class') AS leg_travel_class,
+  JSON_VALUE(leg, '$.legroom') AS leg_legroom
+FROM offers AS o,
+UNNEST(JSON_QUERY_ARRAY(o.offer, '$.flights')) AS leg WITH OFFSET AS leg_index

@@ -1,0 +1,79 @@
+config {
+  type: "incremental",
+  tags: ["staging"],
+  schema: "airfare_staging",
+  description: "One row per DEDUPED, route-scoped fare snapshot (grain: snapshot_date × outbound_date × return_date). Dedup happens HERE, before any offer×leg fan-out, so duplicate/retried runs collapse first. Keeps every scoped row (incl. failed fetches) with an is_valid_fetch flag so the freshness assertion can tell 'run never fired' from 'run fired, fetch failed'. Parses raw_response once into a JSON column for downstream unnest; lifts the per-call price_insights (Google's own comparison signal). Incremental: scans only new snapshot_date partitions — dedup is fully within-partition because a run always writes its own ingestion-day partition.",
+  uniqueKey: ["snapshot_date", "outbound_date", "return_date"],
+  bigquery: {
+    partitionBy: "snapshot_date",
+    clusterBy: ["origin", "destination"]
+    // No updatePartitionFilter on purpose. It would prune the MERGE's target
+    // scan, but any FIXED window can drift below the `>= MAX(self)` source
+    // boundary after a multi-day pipeline gap — reprocessed boundary rows would
+    // then miss their existing partition and INSERT duplicates. The costly scan
+    // here is the SOURCE (raw JSON), already bounded by the watermark below; the
+    // target is one thin route (~2.4k rows/yr), so an unbounded uniqueKey merge
+    // is cheap and always correct. Correctness > premature target pruning.
+  },
+  assertions: {
+    uniqueKey: ["snapshot_date", "outbound_date", "return_date"]
+  }
+}
+
+WITH scoped AS (
+  SELECT
+    captured_at,
+    snapshot_date,
+    origin,
+    destination,
+    outbound_date,
+    return_date,
+    advance_days,
+    return_gap_days,
+    currency,
+    http_status,
+    raw_response,
+    -- Parse once. SAFE.PARSE_JSON returns NULL for the 'REQUEST_ERROR:' bodies
+    -- (transport failures) and any malformed JSON, so it doubles as a validity check.
+    SAFE.PARSE_JSON(raw_response) AS payload
+  FROM ${ref("fare_snapshots")}
+  WHERE origin = '${dataform.projectConfig.vars.route_origin}'
+    AND destination = '${dataform.projectConfig.vars.route_destination}'
+  -- `>=` (not `>`) reprocesses the boundary partition so a same-day re-run picks
+  -- up late/retried arrivals into today's partition; the MERGE + QUALIFY below
+  -- make that idempotent. Still scans one partition, never the whole raw table.
+  ${when(incremental(),
+    `AND snapshot_date >= (SELECT MAX(snapshot_date) FROM ${self()})`)}
+),
+
+deduped AS (
+  SELECT *
+  FROM scoped
+  -- Collapse duplicate / retried snapshots of the same trip within a run.
+  -- Latest capture wins; raw_response breaks captured_at ties deterministically.
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY snapshot_date, outbound_date, return_date
+    ORDER BY captured_at DESC, raw_response DESC
+  ) = 1
+)
+
+SELECT
+  snapshot_date,
+  captured_at,
+  origin,
+  destination,
+  outbound_date,
+  return_date,
+  advance_days,      -- request metadata; days_to_departure is derived downstream
+  return_gap_days,   -- request metadata; stay_length is derived downstream
+  currency,
+  http_status,
+  (http_status = 200 AND payload IS NOT NULL) AS is_valid_fetch,
+  payload,
+  -- price_insights: Google's own per-call comparison signal (free external
+  -- baseline, never our centerpiece). NULL on failed fetches.
+  SAFE_CAST(JSON_VALUE(payload, '$.price_insights.lowest_price') AS INT64) AS gf_lowest_price,
+  JSON_VALUE(payload, '$.price_insights.price_level') AS gf_price_level,
+  SAFE_CAST(JSON_VALUE(payload, '$.price_insights.typical_price_range[0]') AS INT64) AS gf_typical_price_low,
+  SAFE_CAST(JSON_VALUE(payload, '$.price_insights.typical_price_range[1]') AS INT64) AS gf_typical_price_high
+FROM deduped

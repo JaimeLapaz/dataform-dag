@@ -1,0 +1,17 @@
+config {
+  type: "assertion",
+  tags: ["assertion", "data-quality"],
+  description: "REASONABLENESS bounds on the priced offer — catches parse/unnest corruption before it poisons the baselines (a single $0 or $1e6 fare would wreck a cell mean and z-score). Deliberately WIDE, not a business rule: observed economy round-trips run ~$900–$3200 (premium connecting routings), so bounds of $50–$20000 flag only garbage (negative, zero, NULL, or absurd), never a legitimately expensive itinerary. Fires per offending offer so the bad row is identifiable."
+}
+
+SELECT
+  snapshot_date,
+  outbound_date,
+  return_date,
+  offer_list,
+  offer_index,
+  offer_price
+FROM ${ref("int_fare_offers")}
+WHERE offer_price IS NULL
+   OR offer_price < 50
+   OR offer_price > 20000

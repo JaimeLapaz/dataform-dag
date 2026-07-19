@@ -1,0 +1,67 @@
+config {
+  type: "view",
+  tags: ["intermediate", "baseline"],
+  schema: "airfare_intermediate",
+  description: "The seasonal component: expected CHEAPEST fare by DEPARTURE MONTH (grain: one row per departure_month, 1-12) for the DEFAULT-STAY product. Marginal over lead time — sums the additive sufficient stats of int_daily_fare_stats by month. Captures FIXED-CALENDAR seasonality (Morocco summer peak, school holidays); deliberately NOT the lunar Ramadan/Eid effect (drifts ~11 days/yr, so a month-of-year baseline smears it) — an event-relative baseline is the next step, keeping the fixed-vs-lunar seam explicit. MATURITY: is_reliable gates on DISTINCT ANCHORS, not n_observations. This marginal is for reporting/EDA and as a sparse-cell fallback — NOT the residual model's primary predictor (lead & month are collinear in the panel, so the additive formula is biased; the honest surface is the joint (lead × month) cell).",
+  columns: {
+    departure_month: "Month of the departure date (1-12), pooled across years (month-of-year), so it reads as seasonality not a time series.",
+    month_name: "Human-readable month.",
+    n_observations: "Trip-OBSERVATIONS pooled into this month (inflated by panel re-observation).",
+    n_distinct_anchors: "Distinct departure dates (independent trips) in this month. Drives is_reliable.",
+    mean_fare: "Expected (mean) cheapest fare for departures in this month.",
+    stddev_fare: "Sample standard deviation (n-1). NULL when n_observations < 2.",
+    is_reliable: "n_distinct_anchors >= threshold."
+  }
+}
+
+WITH moments AS (
+  SELECT
+    departure_month,
+    SUM(n_observations) AS n_observations,
+    COUNT(DISTINCT snapshot_date) AS n_snapshots,
+    SUM(sum_fare) AS sum_fare,
+    SUM(sum_sq_fare) AS sum_sq_fare,
+    MIN(min_fare) AS min_fare,
+    MAX(max_fare) AS max_fare,
+    SUM(sum_ln_fare) AS sum_ln_fare
+  FROM ${ref("int_daily_fare_stats")}
+  GROUP BY departure_month
+),
+
+anchors AS (
+  SELECT
+    EXTRACT(MONTH FROM outbound_date) AS departure_month,
+    COUNT(DISTINCT outbound_date) AS n_distinct_anchors
+  FROM ${ref("int_trip_fares")}
+  WHERE lead_bucket_min IS NOT NULL
+    AND stay_length_days = ${dataform.projectConfig.vars.default_stay_days}
+  GROUP BY departure_month
+)
+
+SELECT
+  m.departure_month,
+  CASE m.departure_month
+    WHEN 1 THEN 'Jan' WHEN 2 THEN 'Feb' WHEN 3 THEN 'Mar' WHEN 4 THEN 'Apr'
+    WHEN 5 THEN 'May' WHEN 6 THEN 'Jun' WHEN 7 THEN 'Jul' WHEN 8 THEN 'Aug'
+    WHEN 9 THEN 'Sep' WHEN 10 THEN 'Oct' WHEN 11 THEN 'Nov' WHEN 12 THEN 'Dec'
+  END AS month_name,
+  m.n_observations,
+  COALESCE(a.n_distinct_anchors, 0) AS n_distinct_anchors,
+  m.n_snapshots,
+  SAFE_DIVIDE(m.sum_fare, m.n_observations) AS mean_fare,
+  IF(
+    m.n_observations >= 2,
+    SQRT(
+      GREATEST(0.0, SAFE_DIVIDE(m.sum_sq_fare, m.n_observations)
+                    - POW(SAFE_DIVIDE(m.sum_fare, m.n_observations), 2))
+      * m.n_observations / (m.n_observations - 1)
+    ),
+    NULL
+  ) AS stddev_fare,
+  EXP(SAFE_DIVIDE(m.sum_ln_fare, m.n_observations)) AS geomean_fare,
+  ROUND(m.min_fare, 2) AS min_fare,
+  ROUND(m.max_fare, 2) AS max_fare,
+  COALESCE(a.n_distinct_anchors, 0) >= ${anomaly.MIN_RELIABLE_ANCHORS} AS is_reliable
+FROM moments m
+LEFT JOIN anchors a USING (departure_month)
+ORDER BY m.departure_month

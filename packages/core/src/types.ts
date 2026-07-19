@@ -1,0 +1,42 @@
+/**
+ * The node types dataform-dag renders. Dataform's own `config.type` values map onto these:
+ * `declaration` becomes `source`; everything else passes through. `view` is the default when a
+ * file declares no type (matching Dataform's own default for a plain SELECT).
+ */
+export type NodeType =
+  | "table"
+  | "view"
+  | "incremental"
+  | "assertion"
+  | "operations"
+  | "source";
+
+/**
+ * One node in the dependency graph — a single Dataform action. `id` is the target NAME
+ * (`config.name` when present, else the filename without `.sqlx`), which is what `ref()` resolves
+ * against; keying by basename alone would detach any declaration that renames itself (e.g. a file
+ * `raw_fare_snapshots.sqlx` declaring `name: "fare_snapshots"`).
+ */
+export interface DataformNode {
+  id: string;
+  filePath: string;
+  type: NodeType;
+  tags: string[];
+  refs: string[];
+  description?: string;
+}
+
+/**
+ * An immutable dependency graph. `downstreamMap` is derived once at build time: it inverts each
+ * node's `refs` so descendant traversal is O(edges) instead of a full rescan.
+ */
+export interface DataformGraph {
+  nodes: Map<string, DataformNode>;
+  downstreamMap: Map<string, Set<string>>;
+}
+
+/** Wire form of {@link DataformGraph} — Maps/Sets flattened so it survives JSON / postMessage. */
+export interface SerializedGraph {
+  nodes: DataformNode[];
+  downstream: Array<[string, string[]]>;
+}

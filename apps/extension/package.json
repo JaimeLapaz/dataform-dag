@@ -1,0 +1,44 @@
+{
+  "name": "@dataform-dag/extension",
+  "displayName": "Dataform DAG",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Interactive DAG viewer for a Dataform project's .sqlx dependency graph — parsed locally, no cloud.",
+  "publisher": "dataform-dag",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": ["Visualization", "Other"],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "dataformDag.showGraph",
+        "title": "Show Graph",
+        "category": "Dataform DAG"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@dataform-dag/core": "*",
+    "@dataform-dag/ui": "*",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.21.5",
+    "jsdom": "^25.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}

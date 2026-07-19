@@ -1,0 +1,104 @@
+config {
+  type: "view",
+  tags: ["intermediate", "events"],
+  schema: "airfare_intermediate",
+  description: "The event-enrichment bridge: maps each panel ANCHOR (outbound_date = when you travel) to its Moroccan-event context, so downstream layers can test whether fares/residuals move with proximity to Ramadan/Eid. Grain: one row per distinct outbound_date observed in int_trip_fares.\n\nNON-INVASIVE BY DESIGN: a view over int_trip_fares × dim_events — the incremental spine (int_trip_fares / int_daily_fare_stats / fct_fare_anomaly) is untouched, so its verified idempotency is preserved. Nothing here feeds the z-score; this is the CORRELATION seam (docs/warehouse.md layer #5), not a new predictor.\n\nTWO EVENT SHAPES, kept distinct (never conflated): WINDOWS (Ramadan, summer school) → in_* boolean flags; POINT events (Eid, Mawlid, Hijra) → SIGNED days-to-event. Sign convention: days_to_* = event_date − outbound_date, so POSITIVE = you depart BEFORE the event (event upcoming), NEGATIVE = you depart after it. The Eid columns single out the marquee diaspora demand peaks; the nearest_point_event_* columns generalize to any lunar point marker.",
+  columns: {
+    outbound_date: "Panel anchor / departure date the context is computed for.",
+    departure_month: "EXTRACT(MONTH) — convenience join key back to the seasonal (month-of-year) baseline, for the fixed-vs-lunar comparison.",
+    in_ramadan: "Departure falls inside a Ramadan window.",
+    in_summer_school_holiday: "Departure falls inside the (approximate) Moroccan summer school-holiday window.",
+    days_to_nearest_eid: "SIGNED days from departure to the nearest Eid (either al-Fitr or al-Adha). +ve = Eid upcoming after departure; -ve = departed after Eid. The marquee demand-proximity feature.",
+    nearest_eid_category: "Which Eid the nearest-Eid distance refers to.",
+    nearest_eid_date: "Date of that nearest Eid.",
+    eid_proximity: "Coarse label bucketing days_to_nearest_eid into travel-relevant zones (arrive-for-Eid / pre-Eid month / post-Eid / off-peak).",
+    days_to_nearest_point_event: "SIGNED days to the nearest LUNAR point event of ANY kind (Eid/Mawlid/Hijra) — generalizes beyond Eid.",
+    nearest_point_event_category: "Category of that nearest point event.",
+    nearest_point_event_is_peak: "Whether that nearest point event is a high-demand travel peak (an Eid) vs a minor marker."
+  }
+}
+
+WITH anchors AS (
+  SELECT DISTINCT outbound_date
+  FROM ${ref("int_trip_fares")}
+),
+
+point_events AS (
+  SELECT event_id, event_category, start_date AS event_date, is_travel_peak
+  FROM ${ref("dim_events")}
+  WHERE event_shape = 'point'
+),
+
+windows AS (
+  SELECT event_category, start_date, end_date
+  FROM ${ref("dim_events")}
+  WHERE event_shape = 'window'
+),
+
+-- Window membership: LOGICAL_OR over any overlapping window of each type. No
+-- match → NULL → COALESCE'd to FALSE in the final select.
+in_windows AS (
+  SELECT
+    a.outbound_date,
+    LOGICAL_OR(w.event_category = 'ramadan') AS in_ramadan,
+    LOGICAL_OR(w.event_category = 'summer_school_holiday') AS in_summer_school_holiday
+  FROM anchors a
+  LEFT JOIN windows w
+    ON a.outbound_date BETWEEN w.start_date AND w.end_date
+  GROUP BY a.outbound_date
+),
+
+-- Nearest Eid (the demand peaks): pick the min |distance|, tie-break by earlier date.
+nearest_eid AS (
+  SELECT
+    a.outbound_date,
+    p.event_category AS nearest_eid_category,
+    p.event_date AS nearest_eid_date,
+    DATE_DIFF(p.event_date, a.outbound_date, DAY) AS days_to_nearest_eid
+  FROM anchors a
+  CROSS JOIN point_events p
+  WHERE p.event_category IN ('eid_al_fitr', 'eid_al_adha')
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY a.outbound_date
+    ORDER BY ABS(DATE_DIFF(p.event_date, a.outbound_date, DAY)), p.event_date
+  ) = 1
+),
+
+-- Nearest lunar point event of any kind.
+nearest_point AS (
+  SELECT
+    a.outbound_date,
+    p.event_category AS nearest_point_event_category,
+    p.is_travel_peak AS nearest_point_event_is_peak,
+    DATE_DIFF(p.event_date, a.outbound_date, DAY) AS days_to_nearest_point_event
+  FROM anchors a
+  CROSS JOIN point_events p
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY a.outbound_date
+    ORDER BY ABS(DATE_DIFF(p.event_date, a.outbound_date, DAY)), p.event_date
+  ) = 1
+)
+
+SELECT
+  a.outbound_date,
+  EXTRACT(MONTH FROM a.outbound_date) AS departure_month,
+  COALESCE(iw.in_ramadan, FALSE) AS in_ramadan,
+  COALESCE(iw.in_summer_school_holiday, FALSE) AS in_summer_school_holiday,
+  e.days_to_nearest_eid,
+  e.nearest_eid_category,
+  e.nearest_eid_date,
+  -- Travel-relevant zones around Eid (leisure travelers arrive shortly before to
+  -- be there for the feast, then return). Coarse on purpose — sample is tiny.
+  CASE
+    WHEN e.days_to_nearest_eid BETWEEN -3 AND 10 THEN 'arrive_for_eid'
+    WHEN e.days_to_nearest_eid BETWEEN 11 AND 30 THEN 'pre_eid_month'
+    WHEN e.days_to_nearest_eid BETWEEN -30 AND -4 THEN 'post_eid'
+    ELSE 'off_peak'
+  END AS eid_proximity,
+  np.days_to_nearest_point_event,
+  np.nearest_point_event_category,
+  np.nearest_point_event_is_peak
+FROM anchors a
+LEFT JOIN in_windows iw USING (outbound_date)
+LEFT JOIN nearest_eid e USING (outbound_date)
+LEFT JOIN nearest_point np USING (outbound_date)

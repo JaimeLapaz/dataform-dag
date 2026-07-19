@@ -1,0 +1,34 @@
+config {
+  type: "incremental",
+  tags: ["intermediate", "core"],
+  schema: "airfare_intermediate",
+  description: "The fare series: one row per trip-observation (grain: snapshot_date × outbound_date × return_date) with its CHEAPEST offer price and cell coordinates. The single definition of 'the fare for this trip at this observation' — int_daily_fare_stats aggregates it into sufficient statistics, and fct_fare_anomaly scores it, so the cheapest-per-trip + lead-bucket + month logic lives in exactly one place. Keeps ALL stay lengths (stay_length_days) so a future stay-length model can use the 14/21-day variants; the booking-curve/seasonal/anomaly layers filter to the default stay downstream. Carries outbound_date so cells can count DISTINCT ANCHORS (independent trips), which the re-observing panel makes different from a raw observation count. Incremental by snapshot_date.",
+  uniqueKey: ["snapshot_date", "outbound_date", "return_date"],
+  bigquery: {
+    partitionBy: "snapshot_date",
+    clusterBy: ["lead_bucket_min", "departure_month"]
+  },
+  assertions: {
+    uniqueKey: ["snapshot_date", "outbound_date", "return_date"]
+  }
+}
+
+WITH offers AS (
+  SELECT snapshot_date, outbound_date, return_date, days_to_departure,
+         stay_length_days, offer_price
+  FROM ${ref("int_fare_offers")}
+  ${when(incremental(),
+    `WHERE snapshot_date >= (SELECT MAX(snapshot_date) FROM ${self()})`)}
+)
+
+SELECT
+  snapshot_date,
+  outbound_date,
+  return_date,
+  ANY_VALUE(days_to_departure) AS days_to_departure,   -- constant across a trip's offers
+  ANY_VALUE(stay_length_days) AS stay_length_days,
+  ${lead_time.bucketMin("ANY_VALUE(days_to_departure)")} AS lead_bucket_min,
+  EXTRACT(MONTH FROM outbound_date) AS departure_month,
+  MIN(offer_price) AS cheapest_fare
+FROM offers
+GROUP BY snapshot_date, outbound_date, return_date

@@ -1,0 +1,208 @@
+/* App fills its host: without a height chain up to <html>, the flex canvas collapses to 0 and the
+   graph renders blank while the topbar still shows. Every host mounts into #root. */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+.ddag-app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: #111827;
+  background: #f9fafb;
+}
+.ddag-topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 14px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #ffffff;
+}
+.ddag-topbar__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.ddag-topbar__spacer {
+  flex: 1;
+}
+.ddag-topbar__count {
+  color: #6b7280;
+  font-variant-numeric: tabular-nums;
+}
+.ddag-legend {
+  display: flex;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ddag-legend__item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: #4b5563;
+}
+.ddag-legend__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+.ddag-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.ddag-canvas {
+  flex: 1;
+  min-width: 0;
+}
+.ddag-empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: #9ca3af;
+}
+.ddag-detail {
+  width: 300px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  padding: 14px;
+  border-left: 1px solid #e5e7eb;
+  background: #ffffff;
+}
+.ddag-detail__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ddag-detail__title {
+  margin: 0;
+  font-size: 15px;
+  word-break: break-all;
+}
+.ddag-badge {
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+.ddag-detail__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+.ddag-tag {
+  font-size: 11px;
+  background: #eef2ff;
+  color: #4338ca;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.ddag-detail__desc {
+  font-size: 12px;
+  color: #4b5563;
+  white-space: pre-wrap;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.ddag-neighbors__title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #6b7280;
+  margin: 14px 0 4px;
+}
+.ddag-count {
+  color: #9ca3af;
+}
+.ddag-neighbors__empty {
+  margin: 0;
+  color: #9ca3af;
+  font-size: 12px;
+}
+.ddag-neighbors__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ddag-link {
+  background: none;
+  border: none;
+  padding: 2px 0;
+  color: #2563eb;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.ddag-link:hover {
+  text-decoration: underline;
+}
+.ddag-node {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 6px 12px 6px 10px;
+  border: 1px solid #d5dbe3;
+  border-left: 4px solid var(--accent);
+  border-radius: 7px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+  transition: opacity 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+}
+.ddag-node__label {
+  font: 600 13px/1.2 ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  color: #111827;
+  white-space: nowrap;
+}
+.ddag-node__type {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.ddag-node.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.ddag-node.is-dimmed {
+  opacity: 0.22;
+}
+.ddag-node__handle {
+  width: 6px;
+  height: 6px;
+  background: #94a3b8;
+  border: none;
+  opacity: 0;
+}
+.ddag-node:hover .ddag-node__handle {
+  opacity: 1;
+}
+.ddag-btn {
+  background: #111827;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 14px;
+}
+.ddag-btn:hover {
+  background: #374151;
+}

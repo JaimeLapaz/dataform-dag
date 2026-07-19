@@ -1,0 +1,1339 @@
+{
+    "tables": [
+        {
+            "type": "view",
+            "target": {
+                "schema": "airfare_intermediate",
+                "name": "booking_curve_baseline",
+                "database": "airfare-drift"
+            },
+            "query": "\n\nWITH moments AS (\n  SELECT\n    lead_bucket_min,\n    SUM(n_observations) AS n_observations,\n    COUNT(DISTINCT snapshot_date) AS n_snapshots,\n    SUM(sum_fare) AS sum_fare,\n    SUM(sum_sq_fare) AS sum_sq_fare,\n    MIN(min_fare) AS min_fare,\n    MAX(max_fare) AS max_fare,\n    SUM(sum_ln_fare) AS sum_ln_fare\n  FROM `airfare-drift.airfare_intermediate.int_daily_fare_stats`\n  GROUP BY lead_bucket_min\n),\n\n-- Independent-sample count: distinct anchors, NOT additively recoverable from the\n-- summed stats, so computed straight from the small trip grain.\nanchors AS (\n  SELECT\n    CASE\n    WHEN days_to_departure < 14 THEN NULL\n    WHEN days_to_departure < 21 THEN 14\n    WHEN days_to_departure < 30 THEN 21\n    WHEN days_to_departure < 45 THEN 30\n    WHEN days_to_departure < 60 THEN 45\n    WHEN days_to_departure < 90 THEN 60\n    WHEN days_to_departure < 120 THEN 90\n    WHEN days_to_departure < 180 THEN 120\n    ELSE 180\n  END AS lead_bucket_min,\n    COUNT(DISTINCT outbound_date) AS n_distinct_anchors\n  FROM `airfare-drift.airfare_intermediate.int_trip_fares`\n  WHERE stay_length_days = 7\n  GROUP BY lead_bucket_min\n)\n\nSELECT\n  m.lead_bucket_min,\n  CASE m.lead_bucket_min\n    WHEN 14 THEN '14-20'\n    WHEN 21 THEN '21-29'\n    WHEN 30 THEN '30-44'\n    WHEN 45 THEN '45-59'\n    WHEN 60 THEN '60-89'\n    WHEN 90 THEN '90-119'\n    WHEN 120 THEN '120-179'\n    WHEN 180 THEN '180+'\n  END AS lead_time_bucket,\n  m.n_observations,\n  COALESCE(a.n_distinct_anchors, 0) AS n_distinct_anchors,\n  m.n_snapshots,\n  SAFE_DIVIDE(m.sum_fare, m.n_observations) AS mean_fare,\n  IF(\n    m.n_observations >= 2,\n    SQRT(\n      GREATEST(0.0, SAFE_DIVIDE(m.sum_sq_fare, m.n_observations)\n                    - POW(SAFE_DIVIDE(m.sum_fare, m.n_observations), 2))\n      * m.n_observations / (m.n_observations - 1)\n    ),\n    NULL\n  ) AS stddev_fare,\n  EXP(SAFE_DIVIDE(m.sum_ln_fare, m.n_observations)) AS geomean_fare,\n  ROUND(m.min_fare, 2) AS min_fare,\n  ROUND(m.max_fare, 2) AS max_fare,\n  COALESCE(a.n_distinct_anchors, 0) >= 5 AS is_reliable\nFROM moments m\nLEFT JOIN anchors a USING (lead_bucket_min)\nORDER BY m.lead_bucket_min\n",
+            "disabled": false,
+            "fileName": "definitions/intermediate/booking_curve_baseline.sqlx",
+            "tags": [
+                "intermediate",
+                "baseline"
+            ],
+            "actionDescriptor": {
+                "description": "The booking curve: expected CHEAPEST fare vs lead time (grain: one row per lead_time_bucket) for the DEFAULT-STAY product. Marginal over departure_month — sums the additive sufficient stats of int_daily_fare_stats by lead bucket (no history rescan). MATURITY: is_reliable gates on DISTINCT ANCHORS (independent trips), not n_observations (the panel re-observes each anchor, inflating observation count). stddev_fare is NULL when n_observations < 2. This marginal is for reporting/EDA and as a sparse-cell fallback; it is NOT the residual model's primary predictor — the panel makes lead & month collinear, so the honest expected surface is the joint (lead × month) cell in the residual model. Per-segment (hub/carrier/stay) baselines are DEFERRED, not dropped.",
+                "columns": [
+                    {
+                        "description": "Integer lower bound of the lead-time bucket (join key; same includes/lead_time logic as observations).",
+                        "path": [
+                            "lead_bucket_min"
+                        ]
+                    },
+                    {
+                        "description": "Human-readable lead-time range, e.g. '60-89'.",
+                        "path": [
+                            "lead_time_bucket"
+                        ]
+                    },
+                    {
+                        "description": "Trip-OBSERVATIONS pooled into this bucket (inflated by panel re-observation — not an independent-sample count).",
+                        "path": [
+                            "n_observations"
+                        ]
+                    },
+                    {
+                        "description": "Distinct departure dates (independent trips) in this bucket. The honest sample size; drives is_reliable.",
+                        "path": [
+                            "n_distinct_anchors"
+                        ]
+                    },
+                    {
+                        "description": "Expected (mean) cheapest fare for this lead-time bucket.",
+                        "path": [
+                            "mean_fare"
+                        ]
+                    },
+                    {
+                        "description": "Sample standard deviation (n-1). NULL when n_observations < 2.",
+                        "path": [
+                            "stddev_fare"
+                        ]
+                    },
+                    {
+                        "description": "n_distinct_anchors >= threshold — conservative gate for trusting this bucket's expectation.",
+                        "path": [
+                            "is_reliable"
+                        ]
+                    }
+                ]
+            },
+            "dependencyTargets": [
+                {
+                    "schema": "airfare_intermediate",
+                    "name": "int_daily_fare_stats",
+                    "database": "airfare-drift"
+                },
+                {
+                    "schema": "airfare_intermediate",
+                    "name": "int_trip_fares",
+                    "database": "airfare-drift"
+                }
+            ],
+            "canonicalTarget": {
+                "schema": "airfare_intermediate",
+                "name": "booking_curve_baseline",
+                "database": "airfare-drift"
+            },
+            "enumType": "VIEW"
+        },
+        {
+            "type": "view",
+            "target": {
+                "schema": "airfare_intermediate",
+                "name": "fare_surface_baseline",
+                "database": "airfare-drift"
+            },
+            "query": "\n\nWITH moments AS (\n  SELECT\n    lead_bucket_min,\n    departure_month,\n    SUM(n_observations) AS n_observations,\n    COUNT(DISTINCT snapshot_date) AS n_snapshots,\n    SUM(sum_fare) AS sum_fare,\n    SUM(sum_sq_fare) AS sum_sq_fare,\n    MIN(min_fare) AS min_fare,\n    MAX(max_fare) AS max_fare,\n    SUM(sum_ln_fare) AS sum_ln_fare\n  FROM `airfare-drift.airfare_intermediate.int_daily_fare_stats`\n  GROUP BY lead_bucket_min, departure_month\n),\n\n-- Independent-sample count: distinct anchors, NOT additively recoverable from the\n-- summed stats, so computed straight from the small trip grain (same gate the\n-- residual model and both marginal baselines use).\nanchors AS (\n  SELECT\n    lead_bucket_min,\n    EXTRACT(MONTH FROM outbound_date) AS departure_month,\n    COUNT(DISTINCT outbound_date) AS n_distinct_anchors\n  FROM `airfare-drift.airfare_intermediate.int_trip_fares`\n  WHERE lead_bucket_min IS NOT NULL\n    AND stay_length_days = 7\n  GROUP BY lead_bucket_min, departure_month\n)\n\nSELECT\n  m.lead_bucket_min,\n  CASE m.lead_bucket_min\n    WHEN 14 THEN '14-20'\n    WHEN 21 THEN '21-29'\n    WHEN 30 THEN '30-44'\n    WHEN 45 THEN '45-59'\n    WHEN 60 THEN '60-89'\n    WHEN 90 THEN '90-119'\n    WHEN 120 THEN '120-179'\n    WHEN 180 THEN '180+'\n  END AS lead_time_bucket,\n  m.departure_month,\n  CASE m.departure_month\n    WHEN 1 THEN 'Jan' WHEN 2 THEN 'Feb' WHEN 3 THEN 'Mar' WHEN 4 THEN 'Apr'\n    WHEN 5 THEN 'May' WHEN 6 THEN 'Jun' WHEN 7 THEN 'Jul' WHEN 8 THEN 'Aug'\n    WHEN 9 THEN 'Sep' WHEN 10 THEN 'Oct' WHEN 11 THEN 'Nov' WHEN 12 THEN 'Dec'\n  END AS month_name,\n  m.n_observations,\n  COALESCE(a.n_distinct_anchors, 0) AS n_distinct_anchors,\n  m.n_snapshots,\n  SAFE_DIVIDE(m.sum_fare, m.n_observations) AS mean_fare,\n  IF(\n    m.n_observations >= 2,\n    SQRT(\n      GREATEST(0.0, SAFE_DIVIDE(m.sum_sq_fare, m.n_observations)\n                    - POW(SAFE_DIVIDE(m.sum_fare, m.n_observations), 2))\n      * m.n_observations / (m.n_observations - 1)\n    ),\n    NULL\n  ) AS stddev_fare,\n  EXP(SAFE_DIVIDE(m.sum_ln_fare, m.n_observations)) AS geomean_fare,\n  ROUND(m.min_fare, 2) AS min_fare,\n  ROUND(m.max_fare, 2) AS max_fare,\n  COALESCE(a.n_distinct_anchors, 0) >= 5 AS is_reliable\nFROM moments m\nLEFT JOIN anchors a USING (lead_bucket_min, departure_month)\nORDER BY m.lead_bucket_min, m.departure_month\n",
+            "disabled": false,
+            "fileName": "definitions/intermediate/fare_surface_baseline.sqlx",
+            "tags": [
+                "intermediate",
+                "baseline"
+            ],
+            "actionDescriptor": {
+                "description": "The JOINT expectation surface: expected CHEAPEST fare per (lead_time_bucket × departure_month) cell (grain: one row per joint cell) for the DEFAULT-STAY product. This is the honest expected surface the residual model scores against — booking_curve_baseline and seasonal_baseline are its two marginals (summed over month / over lead), useful for EDA but BIASED as a predictor because the panel makes lead & month collinear (a mid-July snapshot forces Aug=short-lead, spring=long-lead). Exposing the joint cell lets Looker render the booking-curve HEATMAP (lead × month → mean fare) directly instead of reconstructing it from marginals. Sums the additive sufficient stats of int_daily_fare_stats by (lead_bucket_min, departure_month) — no history rescan; the LOO per-observation variant lives in fct_fare_anomaly. MATURITY: is_reliable gates on DISTINCT ANCHORS (independent trips), not n_observations (the panel re-observes each anchor). Today the surface is DIAGONAL and sparse — that collinearity is exactly why the joint model exists, so the sparse diagonal is the visual argument, not a defect. stddev_fare NULL when n_observations < 2.",
+                "columns": [
+                    {
+                        "description": "Integer lower bound of the lead-time bucket (heatmap X join key; same includes/lead_time logic as observations).",
+                        "path": [
+                            "lead_bucket_min"
+                        ]
+                    },
+                    {
+                        "description": "Human-readable lead-time range, e.g. '60-89'.",
+                        "path": [
+                            "lead_time_bucket"
+                        ]
+                    },
+                    {
+                        "description": "Month of the departure date (1-12), month-of-year so it reads as seasonality (heatmap Y).",
+                        "path": [
+                            "departure_month"
+                        ]
+                    },
+                    {
+                        "description": "Human-readable month.",
+                        "path": [
+                            "month_name"
+                        ]
+                    },
+                    {
+                        "description": "Trip-OBSERVATIONS pooled into this cell (inflated by panel re-observation — not an independent-sample count).",
+                        "path": [
+                            "n_observations"
+                        ]
+                    },
+                    {
+                        "description": "Distinct departure dates (independent trips) in this cell. The honest sample size; drives is_reliable.",
+                        "path": [
+                            "n_distinct_anchors"
+                        ]
+                    },
+                    {
+                        "description": "Expected (mean) cheapest fare for this joint cell — the heatmap color metric.",
+                        "path": [
+                            "mean_fare"
+                        ]
+                    },
+                    {
+                        "description": "Sample standard deviation (n-1). NULL when n_observations < 2.",
+                        "path": [
+                            "stddev_fare"
+                        ]
+                    },
+                    {
+                        "description": "Geometric mean cheapest fare (log-space center; fares are heavy-tailed).",
+                        "path": [
+                            "geomean_fare"
+                        ]
+                    },
+                    {
+                        "description": "n_distinct_anchors >= threshold — conservative gate for trusting this cell's expectation.",
+                        "path": [
+                            "is_reliable"
+                        ]
+                    }
+                ]
+            },
+            "dependencyTargets": [
+                {
+                    "schema": "airfare_intermediate",
+                    "name": "int_daily_fare_stats",
+                    "database": "airfare-drift"
+                },
+                {
+                    "schema": "airfare_intermediate",
+                    "name": "int_trip_fares",
+                    "database": "airfare-drift"
+                }
+            ],
+            "canonicalTarget": {
+                "schema": "airfare_intermediate",
+                "name": "fare_surface_baseline",
+                "database": "airfare-drift"
+            },
+            "enumType": "VIEW"
+        },
+        {
+            "type": "incremental",
+            "target": {
+                "schema": "airfare_intermediate",
+                "name": "int_daily_fare_stats",
+                "database": "airfare-drift"
+            },
+            "query": "\n\nWITH trips AS (\n  SELECT\n    snapshot_date,\n    lead_bucket_min,\n    departure_month,\n    CAST(cheapest_fare AS FLOAT64) AS fare\n  FROM `airfare-drift.airfare_intermediate.int_trip_fares`\n  WHERE lead_bucket_min IS NOT NULL             -- drop out-of-panel leads (< 14 days)\n    AND stay_length_days = 7\n  \n)\n\nSELECT\n  snapshot_date,\n  lead_bucket_min,\n  departure_month,\n  COUNT(*) AS n_observations,\n  SUM(fare) AS sum_fare,\n  SUM(POW(fare, 2)) AS sum_sq_fare,\n  MIN(fare) AS min_fare,\n  MAX(fare) AS max_fare,\n  SUM(LN(fare)) AS sum_ln_fare,\n  SUM(POW(LN(fare), 2)) AS sum_sq_ln_fare\nFROM trips\nGROUP BY snapshot_date, lead_bucket_min, departure_month\n",
+            "disabled": false,
+            "fileName": "definitions/intermediate/int_daily_fare_stats.sqlx",
+            "bigquery": {
+                "partitionBy": "snapshot_date",
+                "clusterBy": [
+                    "lead_bucket_min",
+                    "departure_month"
+                ]
+            },
+            "tags": [
+                "intermediate",
+                "baseline"
+            ],
+            "actionDescriptor": {
+                "description": "Additive sufficient statistics behind both marginal baselines (grain: snapshot_date × lead_time_bucket × departure_month), aggregated from int_trip_fares filtered to the DEFAULT STAY (product consistency — a 14/21-day trip must not enter a 7-day cell). Moments (n, sum, sum_sq, min/max, +log moments) are additive, so booking_curve_baseline sums over month and seasonal_baseline sums over lead-bucket, both exact. NOTE: n_observations counts trip-OBSERVATIONS, which the re-observing panel inflates beyond independent trips — the reliability gate downstream uses DISTINCT ANCHORS (computed separately from int_trip_fares), never this count. Incremental-correctness core: partitioned by snapshot_date + MERGE-replace on the cell key → boundary reprocessing is idempotent. Incremental by snapshot_date."
+            },
+            "incrementalQuery": "\n\nWITH trips AS (\n  SELECT\n    snapshot_date,\n    lead_bucket_min,\n    departure_month,\n    CAST(cheapest_fare AS FLOAT64) AS fare\n  FROM `airfare-drift.airfare_intermediate.int_trip_fares`\n  WHERE lead_bucket_min IS NOT NULL             -- drop out-of-panel leads (< 14 days)\n    AND stay_length_days = 7\n  AND snapshot_date >= (SELECT MAX(snapshot_date) FROM `airfare-drift.airfare_intermediate.int_daily_fare_stats`)\n)\n\nSELECT\n  snapshot_date,\n  lead_bucket_min,\n  departure_month,\n  COUNT(*) AS n_observations,\n  SUM(fare) AS sum_fare,\n  SUM(POW(fare, 2)) AS sum_sq_fare,\n  MIN(fare) AS min_fare,\n  MAX(fare) AS max_fare,\n  SUM(LN(fare)) AS sum_ln_fare,\n  SUM(POW(LN(fare), 2)) AS sum_sq_ln_fare\nFROM trips\nGROUP BY snapshot_date, lead_bucket_min, departure_month\n",
+            "dependencyTargets": [
+                {
+                    "schema": "airfare_intermediate",
+                    "name": "int_trip_fares",
+                    "database": "airfare-drift"
+                }
+            ],
+            "uniqueKey": [
+                "snapshot_date",
+                "lead_bucket_min",
+                "departure_month"
+            ],
+            "canonicalTarget": {
+                "schema": "airfare_intermediate",
+                "name": "int_daily_fare_stats",
+                "database": "airfare-drift"
+            },
+            "enumType": "INCREMENTAL"
+        },
+        {
+            "type": "view",
+            "target": {
+                "schema": "airfare_intermediate",
+                "name": "int_event_context",
+                "database": "airfare-drift"
+            },
+            "query": "\n\nWITH anchors AS (\n  SELECT DISTINCT outbound_date\n  FROM `airfare-drift.airfare_intermediate.int_trip_fares`\n),\n\npoint_events AS (\n  SELECT event_id, event_category, start_date AS event_date, is_travel_peak\n  FROM `airfare-drift.airfare_reference.dim_events`\n  WHERE event_shape = 'point'\n),\n\nwindows AS (\n  SELECT event_category, start_date, end_date\n  FROM `airfare-drift.airfare_reference.dim_events`\n  WHERE event_shape = 'window'\n),\n\n-- Window membership: LOGICAL_OR over any overlapping window of each type. No\n-- match → NULL → COALESCE'd to FALSE in the final select.\nin_windows AS (\n  SELECT\n    a.outbound_date,\n    LOGICAL_OR(w.event_category = 'ramadan') AS in_ramadan,\n    LOGICAL_OR(w.event_category = 'summer_school_holiday') AS in_summer_school_holiday\n  FROM anchors a\n  LEFT JOIN windows w\n    ON a.outbound_date BETWEEN w.start_date AND w.end_date\n  GROUP BY a.outbound_date\n),\n\n-- Nearest Eid (the demand peaks): pick the min |distance|, tie-break by earlier date.\nnearest_eid AS (\n  SELECT\n    a.outbound_date,\n    p.event_category AS nearest_eid_category,\n    p.event_date AS nearest_eid_date,\n    DATE_DIFF(p.event_date, a.outbound_date, DAY) AS days_to_nearest_eid\n  FROM anchors a\n  CROSS JOIN point_events p\n  WHERE p.event_category IN ('eid_al_fitr', 'eid_al_adha')\n  QUALIFY ROW_NUMBER() OVER (\n    PARTITION BY a.outbound_date\n    ORDER BY ABS(DATE_DIFF(p.event_date, a.outbound_date, DAY)), p.event_date\n  ) = 1\n),\n\n-- Nearest lunar point event of any kind.\nnearest_point AS (\n  SELECT\n    a.outbound_date,\n    p.event_category AS nearest_point_event_category,\n    p.is_travel_peak AS nearest_point_event_is_peak,\n    DATE_DIFF(p.event_date, a.outbound_date, DAY) AS days_to_nearest_point_event\n  FROM anchors a\n  CROSS JOIN point_events p\n  QUALIFY ROW_NUMBER() OVER (\n    PARTITION BY a.outbound_date\n    ORDER BY ABS(DATE_DIFF(p.event_date, a.outbound_date, DAY)), p.event_date\n  ) = 1\n)\n\nSELECT\n  a.outbound_date,\n  EXTRACT(MONTH FROM a.outbound_date) AS departure_month,\n  COALESCE(iw.in_ramadan, FALSE) AS in_ramadan,\n  COALESCE(iw.in_summer_school_holiday, FALSE) AS in_summer_school_holiday,\n  e.days_to_nearest_eid,\n  e.nearest_eid_category,\n  e.nearest_eid_date,\n  -- Travel-relevant zones around Eid (leisure travelers arrive shortly before to\n  -- be there for the feast, then return). Coarse on purpose — sample is tiny.\n  CASE\n    WHEN e.days_to_nearest_eid BETWEEN -3 AND 10 THEN 'arrive_for_eid'\n    WHEN e.days_to_nearest_eid BETWEEN 11 AND 30 THEN 'pre_eid_month'\n    WHEN e.days_to_nearest_eid BETWEEN -30 AND -4 THEN 'post_eid'\n    ELSE 'off_peak'\n  END AS eid_proximity,\n  np.days_to_nearest_point_event,\n  np.nearest_point_event_category,\n  np.nearest_point_event_is_peak\nFROM anchors a\nLEFT JOIN in_windows iw USING (outbound_date)\nLEFT JOIN nearest_eid e USING (outbound_date)\nLEFT JOIN nearest_point np USING (outbound_date)\n",
+            "disabled": false,
+            "fileName": "definitions/intermediate/int_event_context.sqlx",
+            "tags": [
+                "intermediate",
+                "events"
+            ],
+            "actionDescriptor": {
+                "description": "The event-enrichment bridge: maps each panel ANCHOR (outbound_date = when you travel) to its Moroccan-event context, so downstream layers can test whether fares/residuals move with proximity to Ramadan/Eid. Grain: one row per distinct outbound_date observed in int_trip_fares.\n\nNON-INVASIVE BY DESIGN: a view over int_trip_fares × dim_events — the incremental spine (int_trip_fares / int_daily_fare_stats / fct_fare_anomaly) is untouched, so its verified idempotency is preserved. Nothing here feeds the z-score; this is the CORRELATION seam (docs/warehouse.md layer #5), not a new predictor.\n\nTWO EVENT SHAPES, kept distinct (never conflated): WINDOWS (Ramadan, summer school) → in_* boolean flags; POINT events (Eid, Mawlid, Hijra) → SIGNED days-to-event. Sign convention: days_to_* = event_date − outbound_date, so POSITIVE = you depart BEFORE the event (event upcoming), NEGATIVE = you depart after it. The Eid columns single out the marquee diaspora demand peaks; the nearest_point_event_* columns generalize to any lunar point marker.",
+                "columns": [
+                    {
+                        "description": "Panel anchor / departure date the context is computed for.",
+                        "path": [
+                            "outbound_date"
+                        ]
+                    },
+                    {
+                        "description": "EXTRACT(MONTH) — convenience join key back to the seasonal (month-of-year) baseline, for the fixed-vs-lunar comparison.",
+                        "path": [
+                            "departure_month"
+                        ]
+                    },
+                    {
+                        "description": "Departure falls inside a Ramadan window.",
+                        "path": [
+                            "in_ramadan"
+                        ]
+                    },
+                    {
+                        "description": "Departure falls inside the (approximate) Moroccan summer school-holiday window.",
+                        "path": [
+                            "in_summer_school_holiday"
+                        ]
+                    },
+                    {
+                        "description": "SIGNED days from departure to the nearest Eid (either al-Fitr or al-Adha). +ve = Eid upcoming after departure; -ve = departed after Eid. The marquee demand-proximity feature.",
+                        "path": [
+                            "days_to_nearest_eid"
+                        ]
+                    },
+                    {
+                        "description": "Which Eid the nearest-Eid distance refers to.",
+                        "path": [
+                            "nearest_eid_category"
+                        ]
+                    },
+                    {
+                        "description": "Date of that nearest Eid.",
+                        "path": [
+                            "nearest_eid_date"
+                        ]
+                    },
+                    {
+                        "description": "Coarse label bucketing days_to_nearest_eid into travel-relevant zones (arrive-for-Eid / pre-Eid month / post-Eid / off-peak).",
+                        "path": [
+                            "eid_proximity"
+                        ]
+                    },
+                    {
+                        "description": "SIGNED days to the nearest LUNAR point event of ANY kind (Eid/Mawlid/Hijra) — generalizes beyond Eid.",
+                        "path": [
+                            "days_to_nearest_point_event"
+                        ]
+                    },
+                    {
+                        "description": "Category of that nearest point event.",
+                        "path": [
+                            "nearest_point_event_category"
+                        ]
+                    },
+                    {
+                        "description": "Whether that nearest point event is a high-demand travel peak (an Eid) vs a minor marker.",
+                        "path": [
+                            "nearest_point_event_is_peak"
+                        ]
+                    }
+                ]
+            },
+            "dependencyTargets": [
+                {
+                    "schema": "airfare_intermediate",
+                    "name": "int_trip_fares",
+                    "database": "airfare-drift"
+                },
+                {
+                    "schema": "airfare_reference",
+                    "name": "dim_events",
+                    "database": "airfare-drift"
+                }
+            ],
+            "canonicalTarget": {
+                "schema": "airfare_intermediate",
+                "name": "int_event_context",
+                "database": "airfare-drift"
+            },
+            "enumType": "VIEW"
+        },
+        {
+            "type": "incremental",
+            "target": {
+                "schema": "airfare_intermediate",
+                "name": "int_fare_offers",
+                "database": "airfare-drift"
+            },
+            "query": "\n\nWITH legs AS (\n  SELECT *\n  FROM `airfare-drift.airfare_staging.stg_fare_offers`\n  -- Reprocess the boundary partition (idempotent via MERGE + uniqueKey); scans\n  -- only new/boundary partitions, never the whole table (constraint #2).\n  \n),\n\noffers AS (\n  SELECT\n    -- Identity / grain\n    snapshot_date,\n    MAX(captured_at) AS captured_at,\n    origin,\n    destination,\n    outbound_date,\n    return_date,\n    offer_list,\n    offer_index,\n\n    -- Derived trip axes (constraint #3: computed here, not at ingestion)\n    DATE_DIFF(outbound_date, snapshot_date, DAY) AS days_to_departure,\n    DATE_DIFF(return_date, outbound_date, DAY) AS stay_length_days,\n\n    -- Price (round-trip total) + offer attributes\n    MAX(offer_price) AS offer_price,\n    ANY_VALUE(currency) AS currency,\n    ANY_VALUE(offer_type) AS offer_type,\n    MAX(total_duration_min) AS outbound_duration_min,\n    MAX(carbon_emissions_g) AS carbon_emissions_g,\n    ANY_VALUE(departure_token) AS departure_token,\n\n    -- Routing microstructure (outbound)\n    COUNT(*) AS n_legs,\n    COUNT(*) - 1 AS stop_count,\n    ARRAY_TO_STRING(\n      ARRAY_CONCAT(\n        [ARRAY_AGG(leg_departure_airport ORDER BY leg_index LIMIT 1)[OFFSET(0)]],\n        ARRAY_AGG(leg_arrival_airport ORDER BY leg_index)\n      ), '-'\n    ) AS routing_path,\n    IF(COUNT(*) > 1,\n       ARRAY_AGG(leg_arrival_airport ORDER BY leg_index)[OFFSET(0)],\n       NULL) AS primary_hub,\n\n    -- Carriers / aircraft\n    ARRAY_AGG(leg_airline ORDER BY leg_index LIMIT 1)[OFFSET(0)] AS primary_operating_carrier,\n    STRING_AGG(DISTINCT leg_airline, ', ') AS operating_carriers,\n    ARRAY_AGG(\n      SPLIT(leg_flight_number, ' ')[SAFE_OFFSET(0)] ORDER BY leg_index LIMIT 1\n    )[OFFSET(0)] AS primary_marketing_carrier,\n    STRING_AGG(DISTINCT leg_airplane, ', ') AS aircraft_types,\n\n    -- Timing microstructure\n    ARRAY_AGG(leg_departure_time ORDER BY leg_index LIMIT 1)[OFFSET(0)] AS origin_departure_time,\n    ARRAY_AGG(leg_arrival_time ORDER BY leg_index DESC LIMIT 1)[OFFSET(0)] AS destination_arrival_time,\n    EXTRACT(DAYOFWEEK FROM outbound_date) AS outbound_dow\n  FROM legs\n  GROUP BY snapshot_date, origin, destination, outbound_date, return_date, offer_list, offer_index\n)\n\nSELECT\n  *,\n  EXTRACT(HOUR FROM origin_departure_time) AS origin_departure_hour,\n  -- NULL-safe: an unparseable departure time stays NULL rather than silently\n  -- mislabeling as 'red_eye'.\n  CASE\n    WHEN origin_departure_time IS NULL THEN NULL\n    WHEN EXTRACT(HOUR FROM origin_departure_time) BETWEEN 5 AND 11 THEN 'morning'\n    WHEN EXTRACT(HOUR FROM origin_departure_time) BETWEEN 12 AND 16 THEN 'afternoon'\n    WHEN EXTRACT(HOUR FROM origin_departure_time) BETWEEN 17 AND 21 THEN 'evening'\n    ELSE 'red_eye'\n  END AS departure_time_bucket\nFROM offers\n",
+            "disabled": false,
+            "fileName": "definitions/intermediate/int_fare_offers.sqlx",
+            "bigquery": {
+                "partitionBy": "snapshot_date",
+                "clusterBy": [
+                    "days_to_departure",
+                    "primary_hub"
+                ]
+            },
+            "tags": [
+                "intermediate"
+            ],
+            "actionDescriptor": {
+                "description": "One row per priced OFFER (grain: snapshot_date × outbound_date × return_date × offer_list × offer_index) — the analytical unit for booking-curve, dispersion, and residual-anomaly work. Rolls up the outbound legs from stg_fare_offers into offer-level microstructure (routing path, connecting hub, stop count, carriers, departure timing) and adds the derived trip axes (days_to_departure, stay_length) that constraint #3 forbids computing at ingestion. NOTE: an offer's legs describe the OUTBOUND journey only — Google Flights returns return options behind a departure_token we never call (constraint #1) — but offer_price is the full ROUND-TRIP total. Incremental by snapshot_date.",
+                "columns": [
+                    {
+                        "description": "Derived lead time: outbound_date - snapshot_date (DAY). The booking-curve x-axis. Derived from dates here, never trusted from the request's advance_days (a later assertion checks they agree).",
+                        "path": [
+                            "days_to_departure"
+                        ]
+                    },
+                    {
+                        "description": "Derived trip length: return_date - outbound_date (DAY).",
+                        "path": [
+                            "stay_length_days"
+                        ]
+                    },
+                    {
+                        "description": "Full ROUND-TRIP total price for this itinerary (USD). Attached to the outbound offer; there is no separate return price.",
+                        "path": [
+                            "offer_price"
+                        ]
+                    },
+                    {
+                        "description": "Outbound connections = n_legs - 1. ATL–CMN has no nonstop, so always >= 1.",
+                        "path": [
+                            "stop_count"
+                        ]
+                    },
+                    {
+                        "description": "Outbound airport path, e.g. 'ATL-YUL-CMN'.",
+                        "path": [
+                            "routing_path"
+                        ]
+                    },
+                    {
+                        "description": "First connecting airport on the outbound (NULL only if nonstop, which never happens on this route).",
+                        "path": [
+                            "primary_hub"
+                        ]
+                    },
+                    {
+                        "description": "Local departure DATETIME of the first outbound leg (time-of-day microstructure).",
+                        "path": [
+                            "origin_departure_time"
+                        ]
+                    },
+                    {
+                        "description": "Distinct operating carriers across the outbound legs.",
+                        "path": [
+                            "operating_carriers"
+                        ]
+                    },
+                    {
+                        "description": "Operating carrier of the first outbound leg.",
+                        "path": [
+                            "primary_operating_carrier"
+                        ]
+                    }
+                ]
+            },
+            "incrementalQuery": "\n\nWITH legs AS (\n  SELECT *\n  FROM `airfare-drift.airfare_staging.stg_fare_offers`\n  -- Reprocess the boundary partition (idempotent via MERGE + uniqueKey); scans\n  -- only new/boundary partitions, never the whole table (constraint #2).\n  WHERE snapshot_date >= (SELECT MAX(snapshot_date) FROM `airfare-drift.airfare_intermediate.int_fare_offers`)\n),\n\noffers AS (\n  SELECT\n    -- Identity / grain\n    snapshot_date,\n    MAX(captured_at) AS captured_at,\n    origin,\n    destination,\n    outbound_date,\n    return_date,\n    offer_list,\n    offer_index,\n\n    -- Derived trip axes (constraint #3: computed here, not at ingestion)\n    DATE_DIFF(outbound_date, snapshot_date, DAY) AS days_to_departure,\n    DATE_DIFF(return_date, outbound_date, DAY) AS stay_length_days,\n\n    -- Price (round-trip total) + offer attributes\n    MAX(offer_price) AS offer_price,\n    ANY_VALUE(currency) AS currency,\n    ANY_VALUE(offer_type) AS offer_type,\n    MAX(total_duration_min) AS outbound_duration_min,\n    MAX(carbon_emissions_g) AS carbon_emissions_g,\n    ANY_VALUE(departure_token) AS departure_token,\n\n    -- Routing microstructure (outbound)\n    COUNT(*) AS n_legs,\n    COUNT(*) - 1 AS stop_count,\n    ARRAY_TO_STRING(\n      ARRAY_CONCAT(\n        [ARRAY_AGG(leg_departure_airport ORDER BY leg_index LIMIT 1)[OFFSET(0)]],\n        ARRAY_AGG(leg_arrival_airport ORDER BY leg_index)\n      ), '-'\n    ) AS routing_path,\n    IF(COUNT(*) > 1,\n       ARRAY_AGG(leg_arrival_airport ORDER BY leg_index)[OFFSET(0)],\n       NULL) AS primary_hub,\n\n    -- Carriers / aircraft\n    ARRAY_AGG(leg_airline ORDER BY leg_index LIMIT 1)[OFFSET(0)] AS primary_operating_carrier,\n    STRING_AGG(DISTINCT leg_airline, ', ') AS operating_carriers,\n    ARRAY_AGG(\n      SPLIT(leg_flight_number, ' ')[SAFE_OFFSET(0)] ORDER BY leg_index LIMIT 1\n    )[OFFSET(0)] AS primary_marketing_carrier,\n    STRING_AGG(DISTINCT leg_airplane, ', ') AS aircraft_types,\n\n    -- Timing microstructure\n    ARRAY_AGG(leg_departure_time ORDER BY leg_index LIMIT 1)[OFFSET(0)] AS origin_departure_time,\n    ARRAY_AGG(leg_arrival_time ORDER BY leg_index DESC LIMIT 1)[OFFSET(0)] AS destination_arrival_time,\n    EXTRACT(DAYOFWEEK FROM outbound_date) AS outbound_dow\n  FROM legs\n  GROUP BY snapshot_date, origin, destination, outbound_date, return_date, offer_list, offer_index\n)\n\nSELECT\n  *,\n  EXTRACT(HOUR FROM origin_departure_time) AS origin_departure_hour,\n  -- NULL-safe: an unparseable departure time stays NULL rather than silently\n  -- mislabeling as 'red_eye'.\n  CASE\n    WHEN origin_departure_time IS NULL THEN NULL\n    WHEN EXTRACT(HOUR FROM origin_departure_time) BETWEEN 5 AND 11 THEN 'morning'\n    WHEN EXTRACT(HOUR FROM origin_departure_time) BETWEEN 12 AND 16 THEN 'afternoon'\n    WHEN EXTRACT(HOUR FROM origin_departure_time) BETWEEN 17 AND 21 THEN 'evening'\n    ELSE 'red_eye'\n  END AS departure_time_bucket\nFROM offers\n",
+            "dependencyTargets": [
+                {
+                    "schema": "airfare_staging",
+                    "name": "stg_fare_offers",
+                    "database": "airfare-drift"
+                }
+            ],
+            "uniqueKey": [
+                "snapshot_date",
+                "outbound_date",
+                "return_date",
+                "offer_list",
+                "offer_index"
+            ],
+            "canonicalTarget": {
+                "schema": "airfare_intermediate",
+                "name": "int_fare_offers",
+                "database": "airfare-drift"
+            },
+            "enumType": "INCREMENTAL"
+        },
+        {
+            "type": "incremental",
+            "target": {
+                "schema": "airfare_intermediate",
+                "name": "int_trip_fares",
+                "database": "airfare-drift"
+            },
+            "query": "\n\nWITH offers AS (\n  SELECT snapshot_date, outbound_date, return_date, days_to_departure,\n         stay_length_days, offer_price\n  FROM `airfare-drift.airfare_intermediate.int_fare_offers`\n  \n)\n\nSELECT\n  snapshot_date,\n  outbound_date,\n  return_date,\n  ANY_VALUE(days_to_departure) AS days_to_departure,   -- constant across a trip's offers\n  ANY_VALUE(stay_length_days) AS stay_length_days,\n  CASE\n    WHEN ANY_VALUE(days_to_departure) < 14 THEN NULL\n    WHEN ANY_VALUE(days_to_departure) < 21 THEN 14\n    WHEN ANY_VALUE(days_to_departure) < 30 THEN 21\n    WHEN ANY_VALUE(days_to_departure) < 45 THEN 30\n    WHEN ANY_VALUE(days_to_departure) < 60 THEN 45\n    WHEN ANY_VALUE(days_to_departure) < 90 THEN 60\n    WHEN ANY_VALUE(days_to_departure) < 120 THEN 90\n    WHEN ANY_VALUE(days_to_departure) < 180 THEN 120\n    ELSE 180\n  END AS lead_bucket_min,\n  EXTRACT(MONTH FROM outbound_date) AS departure_month,\n  MIN(offer_price) AS cheapest_fare\nFROM offers\nGROUP BY snapshot_date, outbound_date, return_date\n",
+            "disabled": false,
+            "fileName": "definitions/intermediate/int_trip_fares.sqlx",
+            "bigquery": {
+                "partitionBy": "snapshot_date",
+                "clusterBy": [
+                    "lead_bucket_min",
+                    "departure_month"
+                ]
+            },
+            "tags": [
+                "intermediate",
+                "core"
+            ],
+            "actionDescriptor": {
+                "description": "The fare series: one row per trip-observation (grain: snapshot_date × outbound_date × return_date) with its CHEAPEST offer price and cell coordinates. The single definition of 'the fare for this trip at this observation' — int_daily_fare_stats aggregates it into sufficient statistics, and fct_fare_anomaly scores it, so the cheapest-per-trip + lead-bucket + month logic lives in exactly one place. Keeps ALL stay lengths (stay_length_days) so a future stay-length model can use the 14/21-day variants; the booking-curve/seasonal/anomaly layers filter to the default stay downstream. Carries outbound_date so cells can count DISTINCT ANCHORS (independent trips), which the re-observing panel makes different from a raw observation count. Incremental by snapshot_date."
+            },
+            "incrementalQuery": "\n\nWITH offers AS (\n  SELECT snapshot_date, outbound_date, return_date, days_to_departure,\n         stay_length_days, offer_price\n  FROM `airfare-drift.airfare_intermediate.int_fare_offers`\n  WHERE snapshot_date >= (SELECT MAX(snapshot_date) FROM `airfare-drift.airfare_intermediate.int_trip_fares`)\n)\n\nSELECT\n  snapshot_date,\n  outbound_date,\n  return_date,\n  ANY_VALUE(days_to_departure) AS days_to_departure,   -- constant across a trip's offers\n  ANY_VALUE(stay_length_days) AS stay_length_days,\n  CASE\n    WHEN ANY_VALUE(days_to_departure) < 14 THEN NULL\n    WHEN ANY_VALUE(days_to_departure) < 21 THEN 14\n    WHEN ANY_VALUE(days_to_departure) < 30 THEN 21\n    WHEN ANY_VALUE(days_to_departure) < 45 THEN 30\n    WHEN ANY_VALUE(days_to_departure) < 60 THEN 45\n    WHEN ANY_VALUE(days_to_departure) < 90 THEN 60\n    WHEN ANY_VALUE(days_to_departure) < 120 THEN 90\n    WHEN ANY_VALUE(days_to_departure) < 180 THEN 120\n    ELSE 180\n  END AS lead_bucket_min,\n  EXTRACT(MONTH FROM outbound_date) AS departure_month,\n  MIN(offer_price) AS cheapest_fare\nFROM offers\nGROUP BY snapshot_date, outbound_date, return_date\n",
+            "dependencyTargets": [
+                {
+                    "schema": "airfare_intermediate",
+                    "name": "int_fare_offers",
+                    "database": "airfare-drift"
+                }
+            ],
+            "uniqueKey": [
+                "snapshot_date",
+                "outbound_date",
+                "return_date"
+            ],
+            "canonicalTarget": {
+                "schema": "airfare_intermediate",
+                "name": "int_trip_fares",
+                "database": "airfare-drift"
+            },
+            "enumType": "INCREMENTAL"
+        },
+        {
+            "type": "view",
+            "target": {
+                "schema": "airfare_intermediate",
+                "name": "seasonal_baseline",
+                "database": "airfare-drift"
+            },
+            "query": "\n\nWITH moments AS (\n  SELECT\n    departure_month,\n    SUM(n_observations) AS n_observations,\n    COUNT(DISTINCT snapshot_date) AS n_snapshots,\n    SUM(sum_fare) AS sum_fare,\n    SUM(sum_sq_fare) AS sum_sq_fare,\n    MIN(min_fare) AS min_fare,\n    MAX(max_fare) AS max_fare,\n    SUM(sum_ln_fare) AS sum_ln_fare\n  FROM `airfare-drift.airfare_intermediate.int_daily_fare_stats`\n  GROUP BY departure_month\n),\n\nanchors AS (\n  SELECT\n    EXTRACT(MONTH FROM outbound_date) AS departure_month,\n    COUNT(DISTINCT outbound_date) AS n_distinct_anchors\n  FROM `airfare-drift.airfare_intermediate.int_trip_fares`\n  WHERE lead_bucket_min IS NOT NULL\n    AND stay_length_days = 7\n  GROUP BY departure_month\n)\n\nSELECT\n  m.departure_month,\n  CASE m.departure_month\n    WHEN 1 THEN 'Jan' WHEN 2 THEN 'Feb' WHEN 3 THEN 'Mar' WHEN 4 THEN 'Apr'\n    WHEN 5 THEN 'May' WHEN 6 THEN 'Jun' WHEN 7 THEN 'Jul' WHEN 8 THEN 'Aug'\n    WHEN 9 THEN 'Sep' WHEN 10 THEN 'Oct' WHEN 11 THEN 'Nov' WHEN 12 THEN 'Dec'\n  END AS month_name,\n  m.n_observations,\n  COALESCE(a.n_distinct_anchors, 0) AS n_distinct_anchors,\n  m.n_snapshots,\n  SAFE_DIVIDE(m.sum_fare, m.n_observations) AS mean_fare,\n  IF(\n    m.n_observations >= 2,\n    SQRT(\n      GREATEST(0.0, SAFE_DIVIDE(m.sum_sq_fare, m.n_observations)\n                    - POW(SAFE_DIVIDE(m.sum_fare, m.n_observations), 2))\n      * m.n_observations / (m.n_observations - 1)\n    ),\n    NULL\n  ) AS stddev_fare,\n  EXP(SAFE_DIVIDE(m.sum_ln_fare, m.n_observations)) AS geomean_fare,\n  ROUND(m.min_fare, 2) AS min_fare,\n  ROUND(m.max_fare, 2) AS max_fare,\n  COALESCE(a.n_distinct_anchors, 0) >= 5 AS is_reliable\nFROM moments m\nLEFT JOIN anchors a USING (departure_month)\nORDER BY m.departure_month\n",
+            "disabled": false,
+            "fileName": "definitions/intermediate/seasonal_baseline.sqlx",
+            "tags": [
+                "intermediate",
+                "baseline"
+            ],
+            "actionDescriptor": {
+                "description": "The seasonal component: expected CHEAPEST fare by DEPARTURE MONTH (grain: one row per departure_month, 1-12) for the DEFAULT-STAY product. Marginal over lead time — sums the additive sufficient stats of int_daily_fare_stats by month. Captures FIXED-CALENDAR seasonality (Morocco summer peak, school holidays); deliberately NOT the lunar Ramadan/Eid effect (drifts ~11 days/yr, so a month-of-year baseline smears it) — an event-relative baseline is the next step, keeping the fixed-vs-lunar seam explicit. MATURITY: is_reliable gates on DISTINCT ANCHORS, not n_observations. This marginal is for reporting/EDA and as a sparse-cell fallback — NOT the residual model's primary predictor (lead & month are collinear in the panel, so the additive formula is biased; the honest surface is the joint (lead × month) cell).",
+                "columns": [
+                    {
+                        "description": "Month of the departure date (1-12), pooled across years (month-of-year), so it reads as seasonality not a time series.",
+                        "path": [
+                            "departure_month"
+                        ]
+                    },
+                    {
+                        "description": "Human-readable month.",
+                        "path": [
+                            "month_name"
+                        ]
+                    },
+                    {
+                        "description": "Trip-OBSERVATIONS pooled into this month (inflated by panel re-observation).",
+                        "path": [
+                            "n_observations"
+                        ]
+                    },
+                    {
+                        "description": "Distinct departure dates (independent trips) in this month. Drives is_reliable.",
+                        "path": [
+                            "n_distinct_anchors"
+                        ]
+                    },
+                    {
+                        "description": "Expected (mean) cheapest fare for departures in this month.",
+                        "path": [
+                            "mean_fare"
+                        ]
+                    },
+                    {
+                        "description": "Sample standard deviation (n-1). NULL when n_observations < 2.",
+                        "path": [
+                            "stddev_fare"
+                        ]
+                    },
+                    {
+                        "description": "n_distinct_anchors >= threshold.",
+                        "path": [
+                            "is_reliable"
+                        ]
+                    }
+                ]
+            },
+            "dependencyTargets": [
+                {
+                    "schema": "airfare_intermediate",
+                    "name": "int_daily_fare_stats",
+                    "database": "airfare-drift"
+                },
+                {
+                    "schema": "airfare_intermediate",
+                    "name": "int_trip_fares",
+                    "database": "airfare-drift"
+                }
+            ],
+            "canonicalTarget": {
+                "schema": "airfare_intermediate",
+                "name": "seasonal_baseline",
+                "database": "airfare-drift"
+            },
+            "enumType": "VIEW"
+        },
+        {
+            "type": "table",
+            "target": {
+                "schema": "airfare_marts",
+                "name": "fct_fare_anomaly",
+                "database": "airfare-drift"
+            },
+            "query": "\n\nWITH obs AS (\n  SELECT\n    snapshot_date, outbound_date, return_date,\n    days_to_departure, lead_bucket_min, departure_month, stay_length_days,\n    CAST(cheapest_fare AS FLOAT64) AS fare\n  FROM `airfare-drift.airfare_intermediate.int_trip_fares`\n  WHERE lead_bucket_min IS NOT NULL\n    AND stay_length_days = 7\n),\n\n-- Joint-cell sufficient stats (additive rollup) + the non-additive independent\n-- sample count (distinct anchors) computed straight from the trip grain.\ncell_moments AS (\n  SELECT\n    lead_bucket_min, departure_month,\n    SUM(n_observations) AS cell_n,\n    SUM(sum_fare) AS s, SUM(sum_sq_fare) AS q,\n    SUM(sum_ln_fare) AS s_ln, SUM(sum_sq_ln_fare) AS q_ln\n  FROM `airfare-drift.airfare_intermediate.int_daily_fare_stats`\n  GROUP BY lead_bucket_min, departure_month\n),\ncell_anchors AS (\n  SELECT\n    lead_bucket_min, departure_month,\n    COUNT(DISTINCT outbound_date) AS n_distinct_anchors\n  FROM `airfare-drift.airfare_intermediate.int_trip_fares`\n  WHERE lead_bucket_min IS NOT NULL\n    AND stay_length_days = 7\n  GROUP BY lead_bucket_min, departure_month\n),\n\n-- Leave-one-out moments from sufficient stats: remove this observation from its\n-- cell so it can't inflate its own expectation. SAFE_DIVIDE throughout so the\n-- low-N rows (which get gated out) yield NULL rather than a divide-by-zero error.\nscored AS (\n  SELECT\n    o.*,\n    m.cell_n,\n    COALESCE(a.n_distinct_anchors, 0) AS n_distinct_anchors,\n    -- raw-space LOO\n    SAFE_DIVIDE(m.s - o.fare, m.cell_n - 1) AS loo_mean,\n    SQRT(GREATEST(0.0, SAFE_DIVIDE(\n      (m.q - POW(o.fare, 2)) - SAFE_DIVIDE(POW(m.s - o.fare, 2), m.cell_n - 1),\n      m.cell_n - 2\n    ))) AS loo_std,\n    -- log-space LOO\n    SAFE_DIVIDE(m.s_ln - LN(o.fare), m.cell_n - 1) AS loo_mean_ln,\n    SQRT(GREATEST(0.0, SAFE_DIVIDE(\n      (m.q_ln - POW(LN(o.fare), 2)) - SAFE_DIVIDE(POW(m.s_ln - LN(o.fare), 2), m.cell_n - 1),\n      m.cell_n - 2\n    ))) AS loo_std_ln\n  FROM obs o\n  JOIN cell_moments m USING (lead_bucket_min, departure_month)\n  LEFT JOIN cell_anchors a USING (lead_bucket_min, departure_month)\n),\n\nflagged AS (\n  SELECT\n    *,\n    -- a z is only meaningful with enough observations AND >1 independent anchor\n    -- AND a non-degenerate spread\n    (cell_n >= 3\n     AND n_distinct_anchors >= 2\n     AND loo_std IS NOT NULL AND loo_std > 0) AS can_score,\n    (n_distinct_anchors >= 5) AS cell_is_reliable\n  FROM scored\n)\n\nSELECT\n  snapshot_date,\n  outbound_date,\n  return_date,\n  days_to_departure,\n  lead_bucket_min,\n  CASE lead_bucket_min\n    WHEN 14 THEN '14-20'\n    WHEN 21 THEN '21-29'\n    WHEN 30 THEN '30-44'\n    WHEN 45 THEN '45-59'\n    WHEN 60 THEN '60-89'\n    WHEN 90 THEN '90-119'\n    WHEN 120 THEN '120-179'\n    WHEN 180 THEN '180+'\n  END AS lead_time_bucket,\n  departure_month,\n  stay_length_days,\n\n  ROUND(fare, 2) AS observed_fare,\n  ROUND(IF(can_score, loo_mean, NULL), 2) AS expected_fare,\n  ROUND(IF(can_score, fare - loo_mean, NULL), 2) AS residual_usd,\n\n  IF(can_score, ROUND(SAFE_DIVIDE(fare - loo_mean, loo_std), 3), NULL) AS z_score,\n  IF(can_score, ROUND(SAFE_DIVIDE(LN(fare) - loo_mean_ln, loo_std_ln), 3), NULL) AS z_score_log,\n\n  cell_n AS n_observations,\n  n_distinct_anchors,\n  cell_is_reliable,\n\n  COALESCE(\n    can_score\n    AND cell_is_reliable\n    AND ABS(SAFE_DIVIDE(fare - loo_mean, loo_std)) >= 2.5,\n    FALSE\n  ) AS is_anomaly,\n\n  CASE\n    WHEN can_score\n         AND cell_is_reliable\n         AND ABS(SAFE_DIVIDE(fare - loo_mean, loo_std)) >= 2.5\n    THEN IF(fare > loo_mean, 'high', 'low')\n  END AS anomaly_direction,\n\n  CASE\n    WHEN NOT can_score THEN 'insufficient_data'\n    WHEN NOT cell_is_reliable THEN 'scored_unreliable'\n    ELSE 'scored'\n  END AS score_status\nFROM flagged\n",
+            "disabled": false,
+            "fileName": "definitions/marts/fct_fare_anomaly.sqlx",
+            "bigquery": {
+                "partitionBy": "snapshot_date",
+                "clusterBy": [
+                    "is_anomaly",
+                    "lead_bucket_min",
+                    "departure_month"
+                ]
+            },
+            "tags": [
+                "marts",
+                "anomaly"
+            ],
+            "actionDescriptor": {
+                "description": "THE differentiator: the residual of each observed cheapest fare vs its fitted expectation, z-scored. Grain: one row per DEFAULT-STAY trip-observation (snapshot_date × outbound_date × return_date). Expected fare = the JOINT (lead_bucket × month) cell mean (conditions on lead AND season simultaneously, so it's free of the lead/month collinearity that biases an additive marginal surface), computed LEAVE-ONE-OUT from the cell's sufficient statistics so a point never scores against itself. z_score is raw-dollar (interpretable); z_score_log is the log-space robustness cross-check (fares are heavy-tailed).\n\nRecomputed in full each run (type: table, not incremental): every observation re-scores against the current baseline, so early scores are never left stale as cells fill — correctness over an as-of incremental variant (a future operational 'would we have flagged it live' extension). Small (one thin route), and materialized for cheap consumer reads (constraint #5).\n\nMATURITY: is_anomaly fires only when the cell is reliable by DISTINCT ANCHORS (independent trips) — not observation count, which the re-observing panel inflates. Today almost every cell is anchor-sparse, so this is honestly ~all 'insufficient_data'; it lights up as the panel accumulates. CAVEAT: within a cell, repeated re-observations of one anchor are autocorrelated, so loo_std under-states true dispersion (the anchor gate prevents unreliable cells from flagging but does not de-bias loo_std) — the fuller fix (one observation per anchor per cell) trades against the snapshot-partitioned idempotency and is deferred.\n\nCONSUMER NOTE: because every re-observation is scored, one anchor's anomaly episode spans many rows — dedup to anchor-episodes before counting 'how many anomalies', or correlated rows multi-count."
+            },
+            "dependencyTargets": [
+                {
+                    "schema": "airfare_intermediate",
+                    "name": "int_trip_fares",
+                    "database": "airfare-drift"
+                },
+                {
+                    "schema": "airfare_intermediate",
+                    "name": "int_daily_fare_stats",
+                    "database": "airfare-drift"
+                }
+            ],
+            "canonicalTarget": {
+                "schema": "airfare_marts",
+                "name": "fct_fare_anomaly",
+                "database": "airfare-drift"
+            },
+            "enumType": "TABLE"
+        },
+        {
+            "type": "view",
+            "target": {
+                "schema": "airfare_marts",
+                "name": "fct_fare_anomaly_events",
+                "database": "airfare-drift"
+            },
+            "query": "\n\nSELECT\n  -- Anomaly fact (grain: default-stay trip-observation)\n  f.snapshot_date,\n  f.outbound_date,\n  f.return_date,\n  f.days_to_departure,\n  f.lead_time_bucket,\n  f.departure_month,\n  f.observed_fare,\n  f.expected_fare,\n  f.residual_usd,\n  f.z_score,\n  f.z_score_log,\n  f.n_observations,\n  f.n_distinct_anchors,\n  f.cell_is_reliable,\n  f.is_anomaly,\n  f.anomaly_direction,\n  f.score_status,\n\n  -- Event context of the departure (from int_event_context, keyed on outbound_date)\n  e.in_ramadan,\n  e.in_summer_school_holiday,\n  e.days_to_nearest_eid,\n  e.nearest_eid_category,\n  e.nearest_eid_date,\n  e.eid_proximity,\n  e.days_to_nearest_point_event,\n  e.nearest_point_event_category,\n  e.nearest_point_event_is_peak\nFROM `airfare-drift.airfare_marts.fct_fare_anomaly` f\nLEFT JOIN `airfare-drift.airfare_intermediate.int_event_context` e USING (outbound_date)\n",
+            "disabled": false,
+            "fileName": "definitions/marts/fct_fare_anomaly_events.sqlx",
+            "tags": [
+                "marts",
+                "anomaly",
+                "events"
+            ],
+            "actionDescriptor": {
+                "description": "THE event-correlation surface (docs/warehouse.md layer #5, the marquee lunar-drift wrinkle): fct_fare_anomaly enriched with each departure's Moroccan-event context, so a consumer can ask 'do the fare residuals spike near Ramadan/Eid?' — the whole reason the DAG is multi-source. A thin VIEW joining the centerpiece fact to int_event_context on outbound_date; adds no modeling, changes no z-score.\n\nWHY A CORRELATION VIEW, NOT AN EVENT PREDICTOR: the honest expected surface stays the joint (lead × month) cell mean (fct_fare_anomaly). Folding event proximity INTO the expectation would need many independent anchors spanning each lunar phase — which accumulate over a year (maturity discipline, docs/decisions.md). Until then this view lets the event effect be OBSERVED and charted against residuals without over-fitting a sparse predictor.\n\nMATURITY TODAY: fct_fare_anomaly is still ~all 'insufficient_data' (cells anchor-sparse), so is_anomaly is mostly FALSE and the event correlation is not yet statistically testable — but the plumbing is live and one anchor (2027-02-15) already sits inside Ramadan 2027, so the surface fills as the panel rolls forward. CONSUMER NOTE (inherited): every re-observation is a row and one anchor's episode spans many rows — dedup to anchor-episodes before counting anomalies-near-events.",
+                "columns": [
+                    {
+                        "description": "Residual z vs the leave-one-out joint-cell expectation (NULL until the cell can score). See fct_fare_anomaly.",
+                        "path": [
+                            "z_score"
+                        ]
+                    },
+                    {
+                        "description": "Reliable cell AND |z| >= threshold. Correlate the TRUE rows against the event columns.",
+                        "path": [
+                            "is_anomaly"
+                        ]
+                    },
+                    {
+                        "description": "Departure inside a Ramadan window.",
+                        "path": [
+                            "in_ramadan"
+                        ]
+                    },
+                    {
+                        "description": "Signed days departure→nearest Eid; the marquee demand-proximity axis to plot residuals against.",
+                        "path": [
+                            "days_to_nearest_eid"
+                        ]
+                    },
+                    {
+                        "description": "Coarse Eid travel zone (arrive_for_eid / pre_eid_month / post_eid / off_peak).",
+                        "path": [
+                            "eid_proximity"
+                        ]
+                    }
+                ]
+            },
+            "dependencyTargets": [
+                {
+                    "schema": "airfare_marts",
+                    "name": "fct_fare_anomaly",
+                    "database": "airfare-drift"
+                },
+                {
+                    "schema": "airfare_intermediate",
+                    "name": "int_event_context",
+                    "database": "airfare-drift"
+                }
+            ],
+            "canonicalTarget": {
+                "schema": "airfare_marts",
+                "name": "fct_fare_anomaly_events",
+                "database": "airfare-drift"
+            },
+            "enumType": "VIEW"
+        },
+        {
+            "type": "table",
+            "target": {
+                "schema": "airfare_reference",
+                "name": "dim_events",
+                "database": "airfare-drift"
+            },
+            "query": "\n\n-- Raw curated occurrences: (id, category, start, end). end = start for point events.\n-- Derived attributes (name / shape / is_lunar / is_travel_peak) are computed below\n-- from the category so the literal rows stay compact and can't disagree with the\n-- classification.\nWITH events AS (\n  SELECT * FROM UNNEST([\n    -- Ramadan (holy month, window). Lower travel DURING (fasting at home); the\n    -- END triggers the Eid al-Fitr family-visit peak. Drifts ~11 days/yr earlier.\n    STRUCT('ramadan_2026' AS event_id, 'ramadan' AS event_category, DATE '2026-02-17' AS start_date, DATE '2026-03-19' AS end_date),\n    STRUCT('ramadan_2027', 'ramadan', DATE '2027-02-08', DATE '2027-03-09'),\n    STRUCT('ramadan_2028', 'ramadan', DATE '2028-01-28', DATE '2028-02-25'),\n\n    -- Eid al-Fitr (end of Ramadan) — a marquee diaspora travel peak (point).\n    STRUCT('eid_al_fitr_2026', 'eid_al_fitr', DATE '2026-03-20', DATE '2026-03-20'),\n    STRUCT('eid_al_fitr_2027', 'eid_al_fitr', DATE '2027-03-10', DATE '2027-03-10'),\n    STRUCT('eid_al_fitr_2028', 'eid_al_fitr', DATE '2028-02-26', DATE '2028-02-26'),\n\n    -- Eid al-Adha (Feast of Sacrifice) — the other major family-visit peak (point).\n    STRUCT('eid_al_adha_2026', 'eid_al_adha', DATE '2026-05-27', DATE '2026-05-27'),\n    STRUCT('eid_al_adha_2027', 'eid_al_adha', DATE '2027-05-17', DATE '2027-05-17'),\n    STRUCT('eid_al_adha_2028', 'eid_al_adha', DATE '2028-05-05', DATE '2028-05-05'),\n\n    -- Mawlid (Prophet's Birthday) — secondary lunar marker (point).\n    STRUCT('mawlid_2026', 'mawlid', DATE '2026-08-25', DATE '2026-08-25'),\n    STRUCT('mawlid_2027', 'mawlid', DATE '2027-08-15', DATE '2027-08-15'),\n    STRUCT('mawlid_2028', 'mawlid', DATE '2028-08-04', DATE '2028-08-04'),\n\n    -- Hijra (Islamic) New Year — minor lunar marker, anchors the drift story (point).\n    STRUCT('hijra_new_year_2026', 'hijra_new_year', DATE '2026-06-17', DATE '2026-06-17'),\n    STRUCT('hijra_new_year_2027', 'hijra_new_year', DATE '2027-06-06', DATE '2027-06-06'),\n    STRUCT('hijra_new_year_2028', 'hijra_new_year', DATE '2028-05-26', DATE '2028-05-26'),\n\n    -- Summer school holiday (fixed-calendar leisure peak, window; approximate span).\n    STRUCT('summer_school_holiday_2026', 'summer_school_holiday', DATE '2026-07-05', DATE '2026-09-05'),\n    STRUCT('summer_school_holiday_2027', 'summer_school_holiday', DATE '2027-07-05', DATE '2027-09-05'),\n    STRUCT('summer_school_holiday_2028', 'summer_school_holiday', DATE '2028-07-05', DATE '2028-09-05')\n  ])\n)\n\nSELECT\n  event_id,\n  event_category,\n  CASE event_category\n    WHEN 'ramadan' THEN 'Ramadan'\n    WHEN 'eid_al_fitr' THEN 'Eid al-Fitr'\n    WHEN 'eid_al_adha' THEN 'Eid al-Adha'\n    WHEN 'mawlid' THEN \"Mawlid (Prophet's Birthday)\"\n    WHEN 'hijra_new_year' THEN 'Hijra New Year'\n    WHEN 'summer_school_holiday' THEN 'Summer school holiday'\n  END AS event_name,\n  start_date,\n  end_date,\n  IF(start_date = end_date, 'point', 'window') AS event_shape,\n  DATE_DIFF(end_date, start_date, DAY) + 1 AS duration_days,\n  -- Lunar events drift ~11 days/yr against the Gregorian calendar — the reason a\n  -- month-of-year seasonal baseline can't see them and an event-relative one can.\n  event_category IN ('ramadan', 'eid_al_fitr', 'eid_al_adha', 'mawlid', 'hijra_new_year') AS is_lunar,\n  -- The high-demand drivers for this route (Eid family visits + summer leisure),\n  -- vs the minor lunar markers — lets the correlation view focus on peaks.\n  event_category IN ('eid_al_fitr', 'eid_al_adha', 'summer_school_holiday') AS is_travel_peak,\n  EXTRACT(YEAR FROM start_date) AS calendar_year\nFROM events\n",
+            "disabled": false,
+            "fileName": "definitions/reference/dim_events.sqlx",
+            "bigquery": {
+                "clusterBy": [
+                    "event_category",
+                    "calendar_year"
+                ]
+            },
+            "tags": [
+                "reference",
+                "events"
+            ],
+            "actionDescriptor": {
+                "description": "Curated Moroccan travel-demand event calendar — the multi-source seam that makes the seasonal/anomaly layers event-aware (docs/warehouse.md layer #5). Grain: one row per event OCCURRENCE (a specific year's Ramadan, Eid, etc.). Deliberately scoped to the demand drivers of a US→Morocco diaspora leisure route: the LUNAR religious events (Ramadan window + the Eid family-visit peaks + Mawlid/Hijra markers) that DRIFT ~11 days/yr against the Gregorian calendar — the marquee wrinkle a month-of-year seasonal baseline structurally cannot capture — plus the FIXED summer school-holiday window (the big leisure peak already visible in the fares). Single-day civic holidays (Throne Day, Green March, Independence Day) are intentionally excluded: low leisure-travel signal for this route, and they'd add breadth over depth.\n\nSHAPE: point events (Eid, Mawlid, Hijra New Year) get start_date = end_date and are consumed as SIGNED days-to-event; windows (Ramadan, summer school) get a real span and are consumed as in_window flags — never conflate a month-long fast with a one-day feast (int_event_context keeps them distinct).\n\nPROVENANCE: dates curated from timeanddate.com / publicholidays.africa / holidays-info.com (Morocco). LUNAR dates depend on moon sighting and may differ from the observed Moroccan date by ±1 day; the summer school-holiday window is APPROXIMATE (public-school break, ~early Jul–early Sep). Static data-as-code (user decision 2026-07-12) — deterministic, no API budget, reproducible; lunar dates are publishable years ahead. Refresh the far-out years as observed dates firm up."
+            },
+            "canonicalTarget": {
+                "schema": "airfare_reference",
+                "name": "dim_events",
+                "database": "airfare-drift"
+            },
+            "enumType": "TABLE"
+        },
+        {
+            "type": "incremental",
+            "target": {
+                "schema": "airfare_staging",
+                "name": "stg_fare_offers",
+                "database": "airfare-drift"
+            },
+            "query": "\n\nWITH valid_snapshots AS (\n  SELECT\n    snapshot_date,\n    captured_at,\n    origin,\n    destination,\n    outbound_date,\n    return_date,\n    currency,\n    payload\n  FROM `airfare-drift.airfare_staging.stg_fare_snapshots`\n  WHERE is_valid_fetch\n  -- `>=` reprocesses the boundary partition (idempotent via MERGE + uniqueKey),\n  -- so late/retried snapshots that reached staging after a same-day run still flow through.\n  \n),\n\noffers AS (\n  SELECT\n    s.snapshot_date,\n    s.captured_at,\n    s.origin,\n    s.destination,\n    s.outbound_date,\n    s.return_date,\n    s.currency,\n    src.offer_list,\n    offer_index,\n    offer,\n    ARRAY_LENGTH(JSON_QUERY_ARRAY(offer, '$.flights')) AS n_legs\n  FROM valid_snapshots AS s,\n  -- Union best_flights + other_flights, tagging which list each came from.\n  UNNEST([\n    STRUCT('best'  AS offer_list, JSON_QUERY_ARRAY(s.payload, '$.best_flights')  AS arr),\n    STRUCT('other' AS offer_list, JSON_QUERY_ARRAY(s.payload, '$.other_flights') AS arr)\n  ]) AS src,\n  UNNEST(src.arr) AS offer WITH OFFSET AS offer_index\n)\n\nSELECT\n  o.snapshot_date,\n  o.captured_at,\n  o.origin,\n  o.destination,\n  o.outbound_date,\n  o.return_date,\n  o.currency,\n  o.offer_list,\n  o.offer_index,\n  o.n_legs,\n  leg_index,\n\n  -- Offer-level (repeated per leg — the offer is the round-trip itinerary).\n  SAFE_CAST(JSON_VALUE(o.offer, '$.price') AS INT64) AS offer_price,\n  JSON_VALUE(o.offer, '$.type') AS offer_type,\n  SAFE_CAST(JSON_VALUE(o.offer, '$.total_duration') AS INT64) AS total_duration_min,\n  SAFE_CAST(JSON_VALUE(o.offer, '$.carbon_emissions.this_flight') AS INT64) AS carbon_emissions_g,\n  ARRAY_LENGTH(JSON_QUERY_ARRAY(o.offer, '$.layovers')) AS n_layovers,\n  JSON_VALUE(o.offer, '$.departure_token') AS departure_token,\n\n  -- Leg-level.\n  UPPER(JSON_VALUE(leg, '$.departure_airport.id')) AS leg_departure_airport,\n  JSON_VALUE(leg, '$.departure_airport.name') AS leg_departure_airport_name,\n  SAFE.PARSE_DATETIME('%Y-%m-%d %H:%M', JSON_VALUE(leg, '$.departure_airport.time')) AS leg_departure_time,\n  UPPER(JSON_VALUE(leg, '$.arrival_airport.id')) AS leg_arrival_airport,\n  JSON_VALUE(leg, '$.arrival_airport.name') AS leg_arrival_airport_name,\n  SAFE.PARSE_DATETIME('%Y-%m-%d %H:%M', JSON_VALUE(leg, '$.arrival_airport.time')) AS leg_arrival_time,\n  SAFE_CAST(JSON_VALUE(leg, '$.duration') AS INT64) AS leg_duration_min,\n  JSON_VALUE(leg, '$.airline') AS leg_airline,\n  JSON_VALUE(leg, '$.flight_number') AS leg_flight_number,\n  JSON_VALUE(leg, '$.airplane') AS leg_airplane,\n  JSON_VALUE(leg, '$.travel_class') AS leg_travel_class,\n  JSON_VALUE(leg, '$.legroom') AS leg_legroom\nFROM offers AS o,\nUNNEST(JSON_QUERY_ARRAY(o.offer, '$.flights')) AS leg WITH OFFSET AS leg_index\n",
+            "disabled": false,
+            "fileName": "definitions/staging/stg_fare_offers.sqlx",
+            "bigquery": {
+                "partitionBy": "snapshot_date",
+                "clusterBy": [
+                    "origin",
+                    "destination",
+                    "offer_list"
+                ]
+            },
+            "tags": [
+                "staging"
+            ],
+            "actionDescriptor": {
+                "description": "Tidy offer×leg rows — the deeply-nested raw_response flattened (grain: snapshot × offer × leg). best_flights and other_flights are unioned with an offer_list label; each offer's flights array is unnested to legs. STRUCTURAL ONLY: unnest, cast, standardize codes/timestamps. Analytical derivations (days_to_departure, stop count, routing/hub, dispersion) belong in intermediate, per constraint #3. Reads only valid fetches from stg_fare_snapshots. Incremental by snapshot_date."
+            },
+            "incrementalQuery": "\n\nWITH valid_snapshots AS (\n  SELECT\n    snapshot_date,\n    captured_at,\n    origin,\n    destination,\n    outbound_date,\n    return_date,\n    currency,\n    payload\n  FROM `airfare-drift.airfare_staging.stg_fare_snapshots`\n  WHERE is_valid_fetch\n  -- `>=` reprocesses the boundary partition (idempotent via MERGE + uniqueKey),\n  -- so late/retried snapshots that reached staging after a same-day run still flow through.\n  AND snapshot_date >= (SELECT MAX(snapshot_date) FROM `airfare-drift.airfare_staging.stg_fare_offers`)\n),\n\noffers AS (\n  SELECT\n    s.snapshot_date,\n    s.captured_at,\n    s.origin,\n    s.destination,\n    s.outbound_date,\n    s.return_date,\n    s.currency,\n    src.offer_list,\n    offer_index,\n    offer,\n    ARRAY_LENGTH(JSON_QUERY_ARRAY(offer, '$.flights')) AS n_legs\n  FROM valid_snapshots AS s,\n  -- Union best_flights + other_flights, tagging which list each came from.\n  UNNEST([\n    STRUCT('best'  AS offer_list, JSON_QUERY_ARRAY(s.payload, '$.best_flights')  AS arr),\n    STRUCT('other' AS offer_list, JSON_QUERY_ARRAY(s.payload, '$.other_flights') AS arr)\n  ]) AS src,\n  UNNEST(src.arr) AS offer WITH OFFSET AS offer_index\n)\n\nSELECT\n  o.snapshot_date,\n  o.captured_at,\n  o.origin,\n  o.destination,\n  o.outbound_date,\n  o.return_date,\n  o.currency,\n  o.offer_list,\n  o.offer_index,\n  o.n_legs,\n  leg_index,\n\n  -- Offer-level (repeated per leg — the offer is the round-trip itinerary).\n  SAFE_CAST(JSON_VALUE(o.offer, '$.price') AS INT64) AS offer_price,\n  JSON_VALUE(o.offer, '$.type') AS offer_type,\n  SAFE_CAST(JSON_VALUE(o.offer, '$.total_duration') AS INT64) AS total_duration_min,\n  SAFE_CAST(JSON_VALUE(o.offer, '$.carbon_emissions.this_flight') AS INT64) AS carbon_emissions_g,\n  ARRAY_LENGTH(JSON_QUERY_ARRAY(o.offer, '$.layovers')) AS n_layovers,\n  JSON_VALUE(o.offer, '$.departure_token') AS departure_token,\n\n  -- Leg-level.\n  UPPER(JSON_VALUE(leg, '$.departure_airport.id')) AS leg_departure_airport,\n  JSON_VALUE(leg, '$.departure_airport.name') AS leg_departure_airport_name,\n  SAFE.PARSE_DATETIME('%Y-%m-%d %H:%M', JSON_VALUE(leg, '$.departure_airport.time')) AS leg_departure_time,\n  UPPER(JSON_VALUE(leg, '$.arrival_airport.id')) AS leg_arrival_airport,\n  JSON_VALUE(leg, '$.arrival_airport.name') AS leg_arrival_airport_name,\n  SAFE.PARSE_DATETIME('%Y-%m-%d %H:%M', JSON_VALUE(leg, '$.arrival_airport.time')) AS leg_arrival_time,\n  SAFE_CAST(JSON_VALUE(leg, '$.duration') AS INT64) AS leg_duration_min,\n  JSON_VALUE(leg, '$.airline') AS leg_airline,\n  JSON_VALUE(leg, '$.flight_number') AS leg_flight_number,\n  JSON_VALUE(leg, '$.airplane') AS leg_airplane,\n  JSON_VALUE(leg, '$.travel_class') AS leg_travel_class,\n  JSON_VALUE(leg, '$.legroom') AS leg_legroom\nFROM offers AS o,\nUNNEST(JSON_QUERY_ARRAY(o.offer, '$.flights')) AS leg WITH OFFSET AS leg_index\n",
+            "dependencyTargets": [
+                {
+                    "schema": "airfare_staging",
+                    "name": "stg_fare_snapshots",
+                    "database": "airfare-drift"
+                }
+            ],
+            "uniqueKey": [
+                "snapshot_date",
+                "outbound_date",
+                "return_date",
+                "offer_list",
+                "offer_index",
+                "leg_index"
+            ],
+            "canonicalTarget": {
+                "schema": "airfare_staging",
+                "name": "stg_fare_offers",
+                "database": "airfare-drift"
+            },
+            "enumType": "INCREMENTAL"
+        },
+        {
+            "type": "incremental",
+            "target": {
+                "schema": "airfare_staging",
+                "name": "stg_fare_snapshots",
+                "database": "airfare-drift"
+            },
+            "query": "\n\nWITH scoped AS (\n  SELECT\n    captured_at,\n    snapshot_date,\n    origin,\n    destination,\n    outbound_date,\n    return_date,\n    advance_days,\n    return_gap_days,\n    currency,\n    http_status,\n    raw_response,\n    -- Parse once. SAFE.PARSE_JSON returns NULL for the 'REQUEST_ERROR:' bodies\n    -- (transport failures) and any malformed JSON, so it doubles as a validity check.\n    SAFE.PARSE_JSON(raw_response) AS payload\n  FROM `airfare-drift.airfare_raw.fare_snapshots`\n  WHERE origin = 'ATL'\n    AND destination = 'CMN'\n  -- `>=` (not `>`) reprocesses the boundary partition so a same-day re-run picks\n  -- up late/retried arrivals into today's partition; the MERGE + QUALIFY below\n  -- make that idempotent. Still scans one partition, never the whole raw table.\n  \n),\n\ndeduped AS (\n  SELECT *\n  FROM scoped\n  -- Collapse duplicate / retried snapshots of the same trip within a run.\n  -- Latest capture wins; raw_response breaks captured_at ties deterministically.\n  QUALIFY ROW_NUMBER() OVER (\n    PARTITION BY snapshot_date, outbound_date, return_date\n    ORDER BY captured_at DESC, raw_response DESC\n  ) = 1\n)\n\nSELECT\n  snapshot_date,\n  captured_at,\n  origin,\n  destination,\n  outbound_date,\n  return_date,\n  advance_days,      -- request metadata; days_to_departure is derived downstream\n  return_gap_days,   -- request metadata; stay_length is derived downstream\n  currency,\n  http_status,\n  (http_status = 200 AND payload IS NOT NULL) AS is_valid_fetch,\n  payload,\n  -- price_insights: Google's own per-call comparison signal (free external\n  -- baseline, never our centerpiece). NULL on failed fetches.\n  SAFE_CAST(JSON_VALUE(payload, '$.price_insights.lowest_price') AS INT64) AS gf_lowest_price,\n  JSON_VALUE(payload, '$.price_insights.price_level') AS gf_price_level,\n  SAFE_CAST(JSON_VALUE(payload, '$.price_insights.typical_price_range[0]') AS INT64) AS gf_typical_price_low,\n  SAFE_CAST(JSON_VALUE(payload, '$.price_insights.typical_price_range[1]') AS INT64) AS gf_typical_price_high\nFROM deduped\n",
+            "disabled": false,
+            "fileName": "definitions/staging/stg_fare_snapshots.sqlx",
+            "bigquery": {
+                "partitionBy": "snapshot_date",
+                "clusterBy": [
+                    "origin",
+                    "destination"
+                ]
+            },
+            "tags": [
+                "staging"
+            ],
+            "actionDescriptor": {
+                "description": "One row per DEDUPED, route-scoped fare snapshot (grain: snapshot_date × outbound_date × return_date). Dedup happens HERE, before any offer×leg fan-out, so duplicate/retried runs collapse first. Keeps every scoped row (incl. failed fetches) with an is_valid_fetch flag so the freshness assertion can tell 'run never fired' from 'run fired, fetch failed'. Parses raw_response once into a JSON column for downstream unnest; lifts the per-call price_insights (Google's own comparison signal). Incremental: scans only new snapshot_date partitions — dedup is fully within-partition because a run always writes its own ingestion-day partition."
+            },
+            "incrementalQuery": "\n\nWITH scoped AS (\n  SELECT\n    captured_at,\n    snapshot_date,\n    origin,\n    destination,\n    outbound_date,\n    return_date,\n    advance_days,\n    return_gap_days,\n    currency,\n    http_status,\n    raw_response,\n    -- Parse once. SAFE.PARSE_JSON returns NULL for the 'REQUEST_ERROR:' bodies\n    -- (transport failures) and any malformed JSON, so it doubles as a validity check.\n    SAFE.PARSE_JSON(raw_response) AS payload\n  FROM `airfare-drift.airfare_raw.fare_snapshots`\n  WHERE origin = 'ATL'\n    AND destination = 'CMN'\n  -- `>=` (not `>`) reprocesses the boundary partition so a same-day re-run picks\n  -- up late/retried arrivals into today's partition; the MERGE + QUALIFY below\n  -- make that idempotent. Still scans one partition, never the whole raw table.\n  AND snapshot_date >= (SELECT MAX(snapshot_date) FROM `airfare-drift.airfare_staging.stg_fare_snapshots`)\n),\n\ndeduped AS (\n  SELECT *\n  FROM scoped\n  -- Collapse duplicate / retried snapshots of the same trip within a run.\n  -- Latest capture wins; raw_response breaks captured_at ties deterministically.\n  QUALIFY ROW_NUMBER() OVER (\n    PARTITION BY snapshot_date, outbound_date, return_date\n    ORDER BY captured_at DESC, raw_response DESC\n  ) = 1\n)\n\nSELECT\n  snapshot_date,\n  captured_at,\n  origin,\n  destination,\n  outbound_date,\n  return_date,\n  advance_days,      -- request metadata; days_to_departure is derived downstream\n  return_gap_days,   -- request metadata; stay_length is derived downstream\n  currency,\n  http_status,\n  (http_status = 200 AND payload IS NOT NULL) AS is_valid_fetch,\n  payload,\n  -- price_insights: Google's own per-call comparison signal (free external\n  -- baseline, never our centerpiece). NULL on failed fetches.\n  SAFE_CAST(JSON_VALUE(payload, '$.price_insights.lowest_price') AS INT64) AS gf_lowest_price,\n  JSON_VALUE(payload, '$.price_insights.price_level') AS gf_price_level,\n  SAFE_CAST(JSON_VALUE(payload, '$.price_insights.typical_price_range[0]') AS INT64) AS gf_typical_price_low,\n  SAFE_CAST(JSON_VALUE(payload, '$.price_insights.typical_price_range[1]') AS INT64) AS gf_typical_price_high\nFROM deduped\n",
+            "dependencyTargets": [
+                {
+                    "schema": "airfare_raw",
+                    "name": "fare_snapshots",
+                    "database": "airfare-drift"
+                }
+            ],
+            "uniqueKey": [
+                "snapshot_date",
+                "outbound_date",
+                "return_date"
+            ],
+            "canonicalTarget": {
+                "schema": "airfare_staging",
+                "name": "stg_fare_snapshots",
+                "database": "airfare-drift"
+            },
+            "enumType": "INCREMENTAL"
+        }
+    ],
+    "assertions": [
+        {
+            "query": "\n\nSELECT\n  o.snapshot_date,\n  o.outbound_date,\n  o.return_date,\n  o.days_to_departure,\n  s.advance_days,\n  o.stay_length_days,\n  s.return_gap_days\nFROM `airfare-drift.airfare_intermediate.int_fare_offers` o\nJOIN `airfare-drift.airfare_staging.stg_fare_snapshots` s\n  USING (snapshot_date, outbound_date, return_date)\nWHERE o.days_to_departure != s.advance_days\n   OR o.stay_length_days != s.return_gap_days\n",
+            "fileName": "definitions/assertions/assert_derived_lead_matches_request.sqlx",
+            "target": {
+                "schema": "airfare_assertions",
+                "name": "assert_derived_lead_matches_request",
+                "database": "airfare-drift"
+            },
+            "tags": [
+                "assertion",
+                "data-quality"
+            ],
+            "actionDescriptor": {
+                "description": "INTEGRITY: the trip axes DERIVED downstream from dates (constraint #3 — never trust the request) must agree with the request metadata ingestion recorded. days_to_departure (= outbound − snapshot) must equal advance_days, and stay_length_days (= return − outbound) must equal return_gap_days. A mismatch means an ingestion date-boundary/timezone bug (the run's snapshot_date disagreeing with the advance_days it computed at request time) — exactly the class of silent corruption the derive-downstream discipline exists to surface. Joins the offer grain back to the deduped snapshot on the trip key."
+            },
+            "dependencyTargets": [
+                {
+                    "schema": "airfare_intermediate",
+                    "name": "int_fare_offers",
+                    "database": "airfare-drift"
+                },
+                {
+                    "schema": "airfare_staging",
+                    "name": "stg_fare_snapshots",
+                    "database": "airfare-drift"
+                }
+            ],
+            "canonicalTarget": {
+                "schema": "airfare_assertions",
+                "name": "assert_derived_lead_matches_request",
+                "database": "airfare-drift"
+            }
+        },
+        {
+            "query": "\n\nSELECT\n  snapshot_date,\n  outbound_date,\n  return_date,\n  offer_list,\n  offer_index,\n  offer_price\nFROM `airfare-drift.airfare_intermediate.int_fare_offers`\nWHERE offer_price IS NULL\n   OR offer_price < 50\n   OR offer_price > 20000\n",
+            "fileName": "definitions/assertions/assert_fare_price_bounds.sqlx",
+            "target": {
+                "schema": "airfare_assertions",
+                "name": "assert_fare_price_bounds",
+                "database": "airfare-drift"
+            },
+            "tags": [
+                "assertion",
+                "data-quality"
+            ],
+            "actionDescriptor": {
+                "description": "REASONABLENESS bounds on the priced offer — catches parse/unnest corruption before it poisons the baselines (a single $0 or $1e6 fare would wreck a cell mean and z-score). Deliberately WIDE, not a business rule: observed economy round-trips run ~$900–$3200 (premium connecting routings), so bounds of $50–$20000 flag only garbage (negative, zero, NULL, or absurd), never a legitimately expensive itinerary. Fires per offending offer so the bad row is identifiable."
+            },
+            "dependencyTargets": [
+                {
+                    "schema": "airfare_intermediate",
+                    "name": "int_fare_offers",
+                    "database": "airfare-drift"
+                }
+            ],
+            "canonicalTarget": {
+                "schema": "airfare_assertions",
+                "name": "assert_fare_price_bounds",
+                "database": "airfare-drift"
+            }
+        },
+        {
+            "query": "\n\n-- Cadence is `0 9 */2 * *` (every 2 days), and Scheduler retries a transient\n-- failure the same day, so a healthy pipeline always has a valid fetch within\n-- ~2 days. >3 days stale means a full cycle (fire + all retries) was missed —\n-- the alarm point. Returns a row ONLY when stale, which fails the assertion.\nWITH latest AS (\n  SELECT MAX(snapshot_date) AS last_valid_snapshot\n  FROM `airfare-drift.airfare_staging.stg_fare_snapshots`\n  WHERE is_valid_fetch\n)\nSELECT\n  last_valid_snapshot,\n  DATE_DIFF(CURRENT_DATE(), last_valid_snapshot, DAY) AS days_since_valid_fetch\nFROM latest\nWHERE last_valid_snapshot IS NULL\n   OR DATE_DIFF(CURRENT_DATE(), last_valid_snapshot, DAY) > 3\n",
+            "fileName": "definitions/assertions/assert_snapshot_freshness.sqlx",
+            "target": {
+                "schema": "airfare_assertions",
+                "name": "assert_snapshot_freshness",
+                "database": "airfare-drift"
+            },
+            "tags": [
+                "assertion",
+                "monitoring"
+            ],
+            "actionDescriptor": {
+                "description": "FRESHNESS backstop — the continuous-accumulation guarantee (constraint #4). Fails when no VALID fetch has landed recently, i.e. the ingestion pipeline has silently stopped writing. Uses is_valid_fetch (not just any row) so it distinguishes 'run never fired' from 'run fired but every fetch failed' — a partition full of error rows is still stale for modeling. Complements the per-call error isolation + Scheduler retries: those keep one run resilient; this detects a run that stopped happening at all."
+            },
+            "dependencyTargets": [
+                {
+                    "schema": "airfare_staging",
+                    "name": "stg_fare_snapshots",
+                    "database": "airfare-drift"
+                }
+            ],
+            "canonicalTarget": {
+                "schema": "airfare_assertions",
+                "name": "assert_snapshot_freshness",
+                "database": "airfare-drift"
+            }
+        },
+        {
+            "query": "\nSELECT\n  *\nFROM (\n  SELECT\n    snapshot_date, lead_bucket_min, departure_month,\n    COUNT(1) AS index_row_count\n  FROM `airfare-drift.airfare_intermediate.int_daily_fare_stats`\n  GROUP BY snapshot_date, lead_bucket_min, departure_month\n  ) AS data\nWHERE index_row_count > 1\n",
+            "fileName": "definitions/intermediate/int_daily_fare_stats.sqlx",
+            "target": {
+                "schema": "airfare_assertions",
+                "name": "airfare_intermediate_int_daily_fare_stats_assertions_uniqueKey_0",
+                "database": "airfare-drift"
+            },
+            "tags": [
+                "intermediate",
+                "baseline"
+            ],
+            "dependencyTargets": [
+                {
+                    "schema": "airfare_intermediate",
+                    "name": "int_daily_fare_stats",
+                    "database": "airfare-drift"
+                }
+            ],
+            "canonicalTarget": {
+                "schema": "airfare_assertions",
+                "name": "airfare_intermediate_int_daily_fare_stats_assertions_uniqueKey_0",
+                "database": "airfare-drift"
+            },
+            "parentAction": {
+                "schema": "airfare_intermediate",
+                "name": "int_daily_fare_stats",
+                "database": "airfare-drift"
+            }
+        },
+        {
+            "query": "\nSELECT\n  *\nFROM (\n  SELECT\n    snapshot_date, outbound_date, return_date, offer_list, offer_index,\n    COUNT(1) AS index_row_count\n  FROM `airfare-drift.airfare_intermediate.int_fare_offers`\n  GROUP BY snapshot_date, outbound_date, return_date, offer_list, offer_index\n  ) AS data\nWHERE index_row_count > 1\n",
+            "fileName": "definitions/intermediate/int_fare_offers.sqlx",
+            "target": {
+                "schema": "airfare_assertions",
+                "name": "airfare_intermediate_int_fare_offers_assertions_uniqueKey_0",
+                "database": "airfare-drift"
+            },
+            "tags": [
+                "intermediate"
+            ],
+            "dependencyTargets": [
+                {
+                    "schema": "airfare_intermediate",
+                    "name": "int_fare_offers",
+                    "database": "airfare-drift"
+                }
+            ],
+            "canonicalTarget": {
+                "schema": "airfare_assertions",
+                "name": "airfare_intermediate_int_fare_offers_assertions_uniqueKey_0",
+                "database": "airfare-drift"
+            },
+            "parentAction": {
+                "schema": "airfare_intermediate",
+                "name": "int_fare_offers",
+                "database": "airfare-drift"
+            }
+        },
+        {
+            "query": "\nSELECT\n  *\nFROM (\n  SELECT\n    snapshot_date, outbound_date, return_date,\n    COUNT(1) AS index_row_count\n  FROM `airfare-drift.airfare_intermediate.int_trip_fares`\n  GROUP BY snapshot_date, outbound_date, return_date\n  ) AS data\nWHERE index_row_count > 1\n",
+            "fileName": "definitions/intermediate/int_trip_fares.sqlx",
+            "target": {
+                "schema": "airfare_assertions",
+                "name": "airfare_intermediate_int_trip_fares_assertions_uniqueKey_0",
+                "database": "airfare-drift"
+            },
+            "tags": [
+                "intermediate",
+                "core"
+            ],
+            "dependencyTargets": [
+                {
+                    "schema": "airfare_intermediate",
+                    "name": "int_trip_fares",
+                    "database": "airfare-drift"
+                }
+            ],
+            "canonicalTarget": {
+                "schema": "airfare_assertions",
+                "name": "airfare_intermediate_int_trip_fares_assertions_uniqueKey_0",
+                "database": "airfare-drift"
+            },
+            "parentAction": {
+                "schema": "airfare_intermediate",
+                "name": "int_trip_fares",
+                "database": "airfare-drift"
+            }
+        },
+        {
+            "query": "\nSELECT\n  *\nFROM (\n  SELECT\n    snapshot_date, outbound_date, return_date,\n    COUNT(1) AS index_row_count\n  FROM `airfare-drift.airfare_marts.fct_fare_anomaly`\n  GROUP BY snapshot_date, outbound_date, return_date\n  ) AS data\nWHERE index_row_count > 1\n",
+            "fileName": "definitions/marts/fct_fare_anomaly.sqlx",
+            "target": {
+                "schema": "airfare_assertions",
+                "name": "airfare_marts_fct_fare_anomaly_assertions_uniqueKey_0",
+                "database": "airfare-drift"
+            },
+            "tags": [
+                "marts",
+                "anomaly"
+            ],
+            "dependencyTargets": [
+                {
+                    "schema": "airfare_marts",
+                    "name": "fct_fare_anomaly",
+                    "database": "airfare-drift"
+                }
+            ],
+            "canonicalTarget": {
+                "schema": "airfare_assertions",
+                "name": "airfare_marts_fct_fare_anomaly_assertions_uniqueKey_0",
+                "database": "airfare-drift"
+            },
+            "parentAction": {
+                "schema": "airfare_marts",
+                "name": "fct_fare_anomaly",
+                "database": "airfare-drift"
+            }
+        },
+        {
+            "query": "\nSELECT\n  *\nFROM (\n  SELECT\n    event_id,\n    COUNT(1) AS index_row_count\n  FROM `airfare-drift.airfare_reference.dim_events`\n  GROUP BY event_id\n  ) AS data\nWHERE index_row_count > 1\n",
+            "fileName": "definitions/reference/dim_events.sqlx",
+            "target": {
+                "schema": "airfare_assertions",
+                "name": "airfare_reference_dim_events_assertions_uniqueKey_0",
+                "database": "airfare-drift"
+            },
+            "tags": [
+                "reference",
+                "events"
+            ],
+            "dependencyTargets": [
+                {
+                    "schema": "airfare_reference",
+                    "name": "dim_events",
+                    "database": "airfare-drift"
+                }
+            ],
+            "canonicalTarget": {
+                "schema": "airfare_assertions",
+                "name": "airfare_reference_dim_events_assertions_uniqueKey_0",
+                "database": "airfare-drift"
+            },
+            "parentAction": {
+                "schema": "airfare_reference",
+                "name": "dim_events",
+                "database": "airfare-drift"
+            }
+        },
+        {
+            "query": "\nSELECT\n  'end_date >= start_date' AS failing_row_condition,\n  *\nFROM `airfare-drift.airfare_reference.dim_events`\nWHERE NOT (end_date >= start_date)\nUNION ALL\nSELECT\n  'start_date >= DATE \\'2025-01-01\\' AND start_date < DATE \\'2029-01-01\\'' AS failing_row_condition,\n  *\nFROM `airfare-drift.airfare_reference.dim_events`\nWHERE NOT (start_date >= DATE '2025-01-01' AND start_date < DATE '2029-01-01')\nUNION ALL\nSELECT\n  'event_id IS NOT NULL' AS failing_row_condition,\n  *\nFROM `airfare-drift.airfare_reference.dim_events`\nWHERE NOT (event_id IS NOT NULL)\nUNION ALL\nSELECT\n  'event_category IS NOT NULL' AS failing_row_condition,\n  *\nFROM `airfare-drift.airfare_reference.dim_events`\nWHERE NOT (event_category IS NOT NULL)\nUNION ALL\nSELECT\n  'start_date IS NOT NULL' AS failing_row_condition,\n  *\nFROM `airfare-drift.airfare_reference.dim_events`\nWHERE NOT (start_date IS NOT NULL)\nUNION ALL\nSELECT\n  'end_date IS NOT NULL' AS failing_row_condition,\n  *\nFROM `airfare-drift.airfare_reference.dim_events`\nWHERE NOT (end_date IS NOT NULL)\n",
+            "fileName": "definitions/reference/dim_events.sqlx",
+            "target": {
+                "schema": "airfare_assertions",
+                "name": "airfare_reference_dim_events_assertions_rowConditions",
+                "database": "airfare-drift"
+            },
+            "tags": [
+                "reference",
+                "events"
+            ],
+            "dependencyTargets": [
+                {
+                    "schema": "airfare_reference",
+                    "name": "dim_events",
+                    "database": "airfare-drift"
+                }
+            ],
+            "canonicalTarget": {
+                "schema": "airfare_assertions",
+                "name": "airfare_reference_dim_events_assertions_rowConditions",
+                "database": "airfare-drift"
+            },
+            "parentAction": {
+                "schema": "airfare_reference",
+                "name": "dim_events",
+                "database": "airfare-drift"
+            }
+        },
+        {
+            "query": "\nSELECT\n  *\nFROM (\n  SELECT\n    snapshot_date, outbound_date, return_date, offer_list, offer_index, leg_index,\n    COUNT(1) AS index_row_count\n  FROM `airfare-drift.airfare_staging.stg_fare_offers`\n  GROUP BY snapshot_date, outbound_date, return_date, offer_list, offer_index, leg_index\n  ) AS data\nWHERE index_row_count > 1\n",
+            "fileName": "definitions/staging/stg_fare_offers.sqlx",
+            "target": {
+                "schema": "airfare_assertions",
+                "name": "airfare_staging_stg_fare_offers_assertions_uniqueKey_0",
+                "database": "airfare-drift"
+            },
+            "tags": [
+                "staging"
+            ],
+            "dependencyTargets": [
+                {
+                    "schema": "airfare_staging",
+                    "name": "stg_fare_offers",
+                    "database": "airfare-drift"
+                }
+            ],
+            "canonicalTarget": {
+                "schema": "airfare_assertions",
+                "name": "airfare_staging_stg_fare_offers_assertions_uniqueKey_0",
+                "database": "airfare-drift"
+            },
+            "parentAction": {
+                "schema": "airfare_staging",
+                "name": "stg_fare_offers",
+                "database": "airfare-drift"
+            }
+        },
+        {
+            "query": "\nSELECT\n  *\nFROM (\n  SELECT\n    snapshot_date, outbound_date, return_date,\n    COUNT(1) AS index_row_count\n  FROM `airfare-drift.airfare_staging.stg_fare_snapshots`\n  GROUP BY snapshot_date, outbound_date, return_date\n  ) AS data\nWHERE index_row_count > 1\n",
+            "fileName": "definitions/staging/stg_fare_snapshots.sqlx",
+            "target": {
+                "schema": "airfare_assertions",
+                "name": "airfare_staging_stg_fare_snapshots_assertions_uniqueKey_0",
+                "database": "airfare-drift"
+            },
+            "tags": [
+                "staging"
+            ],
+            "dependencyTargets": [
+                {
+                    "schema": "airfare_staging",
+                    "name": "stg_fare_snapshots",
+                    "database": "airfare-drift"
+                }
+            ],
+            "canonicalTarget": {
+                "schema": "airfare_assertions",
+                "name": "airfare_staging_stg_fare_snapshots_assertions_uniqueKey_0",
+                "database": "airfare-drift"
+            },
+            "parentAction": {
+                "schema": "airfare_staging",
+                "name": "stg_fare_snapshots",
+                "database": "airfare-drift"
+            }
+        }
+    ],
+    "projectConfig": {
+        "warehouse": "bigquery",
+        "defaultSchema": "airfare_staging",
+        "assertionSchema": "airfare_assertions",
+        "defaultDatabase": "airfare-drift",
+        "vars": {
+            "route_origin": "ATL",
+            "route_destination": "CMN",
+            "default_stay_days": "7"
+        },
+        "defaultLocation": "US"
+    },
+    "graphErrors": {},
+    "declarations": [
+        {
+            "target": {
+                "schema": "airfare_raw",
+                "name": "fare_snapshots",
+                "database": "airfare-drift"
+            },
+            "actionDescriptor": {
+                "description": "Raw, append-only SerpApi Google Flights responses for the ATL–CMN panel. One row per panel query per run; `raw_response` holds the full API body verbatim (STRING). Deliberately messy: duplicate/late snapshots and the deeply-nested offer arrays are preserved here — all parsing/dedup happens downstream in staging (constraint #3). Partitioned by `snapshot_date`, clustered by (origin, destination).",
+                "columns": [
+                    {
+                        "description": "Per-row wall-clock time the fetch completed (UTC TIMESTAMP). Used to pick the latest of duplicate snapshots during dedup.",
+                        "path": [
+                            "captured_at"
+                        ]
+                    },
+                    {
+                        "description": "Ingestion-run date (DATE), fixed at run start so all of a run's rows share one partition. The observation date for the booking curve.",
+                        "path": [
+                            "snapshot_date"
+                        ]
+                    },
+                    {
+                        "description": "Requested departure airport IATA code (always ATL post-pivot).",
+                        "path": [
+                            "origin"
+                        ]
+                    },
+                    {
+                        "description": "Requested arrival airport IATA code (always CMN post-pivot).",
+                        "path": [
+                            "destination"
+                        ]
+                    },
+                    {
+                        "description": "Requested departure date (DATE) — a panel anchor.",
+                        "path": [
+                            "outbound_date"
+                        ]
+                    },
+                    {
+                        "description": "Requested return date (DATE).",
+                        "path": [
+                            "return_date"
+                        ]
+                    },
+                    {
+                        "description": "Request-time lead: outbound_date - snapshot_date. REQUEST METADATA — downstream derives its own days_to_departure and asserts they agree.",
+                        "path": [
+                            "advance_days"
+                        ]
+                    },
+                    {
+                        "description": "Request-time stay length: return_date - outbound_date. Request metadata.",
+                        "path": [
+                            "return_gap_days"
+                        ]
+                    },
+                    {
+                        "description": "Requested currency (always USD).",
+                        "path": [
+                            "currency"
+                        ]
+                    },
+                    {
+                        "description": "SerpApi HTTP status. 200 = success; non-200 = captured error body; NULL = transport-level failure (raw_response starts with 'REQUEST_ERROR:'). Staging treats non-200/NULL as a failed fetch.",
+                        "path": [
+                            "http_status"
+                        ]
+                    },
+                    {
+                        "description": "Full API response body as-is (STRING). JSON on success; a 'REQUEST_ERROR: ...' string on transport failure.",
+                        "path": [
+                            "raw_response"
+                        ]
+                    }
+                ]
+            },
+            "fileName": "definitions/sources/raw_fare_snapshots.sqlx",
+            "canonicalTarget": {
+                "schema": "airfare_raw",
+                "name": "fare_snapshots",
+                "database": "airfare-drift"
+            }
+        }
+    ],
+    "dataformCoreVersion": "3.0.0",
+    "targets": [
+        {
+            "schema": "airfare_assertions",
+            "name": "assert_derived_lead_matches_request",
+            "database": "airfare-drift"
+        },
+        {
+            "schema": "airfare_assertions",
+            "name": "assert_fare_price_bounds",
+            "database": "airfare-drift"
+        },
+        {
+            "schema": "airfare_assertions",
+            "name": "assert_snapshot_freshness",
+            "database": "airfare-drift"
+        },
+        {
+            "schema": "airfare_intermediate",
+            "name": "booking_curve_baseline",
+            "database": "airfare-drift"
+        },
+        {
+            "schema": "airfare_intermediate",
+            "name": "fare_surface_baseline",
+            "database": "airfare-drift"
+        },
+        {
+            "schema": "airfare_intermediate",
+            "name": "int_daily_fare_stats",
+            "database": "airfare-drift"
+        },
+        {
+            "schema": "airfare_assertions",
+            "name": "airfare_intermediate_int_daily_fare_stats_assertions_uniqueKey_0",
+            "database": "airfare-drift"
+        },
+        {
+            "schema": "airfare_intermediate",
+            "name": "int_event_context",
+            "database": "airfare-drift"
+        },
+        {
+            "schema": "airfare_intermediate",
+            "name": "int_fare_offers",
+            "database": "airfare-drift"
+        },
+        {
+            "schema": "airfare_assertions",
+            "name": "airfare_intermediate_int_fare_offers_assertions_uniqueKey_0",
+            "database": "airfare-drift"
+        },
+        {
+            "schema": "airfare_intermediate",
+            "name": "int_trip_fares",
+            "database": "airfare-drift"
+        },
+        {
+            "schema": "airfare_assertions",
+            "name": "airfare_intermediate_int_trip_fares_assertions_uniqueKey_0",
+            "database": "airfare-drift"
+        },
+        {
+            "schema": "airfare_intermediate",
+            "name": "seasonal_baseline",
+            "database": "airfare-drift"
+        },
+        {
+            "schema": "airfare_marts",
+            "name": "fct_fare_anomaly",
+            "database": "airfare-drift"
+        },
+        {
+            "schema": "airfare_assertions",
+            "name": "airfare_marts_fct_fare_anomaly_assertions_uniqueKey_0",
+            "database": "airfare-drift"
+        },
+        {
+            "schema": "airfare_marts",
+            "name": "fct_fare_anomaly_events",
+            "database": "airfare-drift"
+        },
+        {
+            "schema": "airfare_reference",
+            "name": "dim_events",
+            "database": "airfare-drift"
+        },
+        {
+            "schema": "airfare_assertions",
+            "name": "airfare_reference_dim_events_assertions_uniqueKey_0",
+            "database": "airfare-drift"
+        },
+        {
+            "schema": "airfare_assertions",
+            "name": "airfare_reference_dim_events_assertions_rowConditions",
+            "database": "airfare-drift"
+        },
+        {
+            "schema": "airfare_raw",
+            "name": "fare_snapshots",
+            "database": "airfare-drift"
+        },
+        {
+            "schema": "airfare_staging",
+            "name": "stg_fare_offers",
+            "database": "airfare-drift"
+        },
+        {
+            "schema": "airfare_assertions",
+            "name": "airfare_staging_stg_fare_offers_assertions_uniqueKey_0",
+            "database": "airfare-drift"
+        },
+        {
+            "schema": "airfare_staging",
+            "name": "stg_fare_snapshots",
+            "database": "airfare-drift"
+        },
+        {
+            "schema": "airfare_assertions",
+            "name": "airfare_staging_stg_fare_snapshots_assertions_uniqueKey_0",
+            "database": "airfare-drift"
+        }
+    ]
+}
+

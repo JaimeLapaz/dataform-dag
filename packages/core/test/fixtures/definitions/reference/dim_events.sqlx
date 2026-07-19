@@ -1,0 +1,80 @@
+config {
+  type: "table",
+  tags: ["reference", "events"],
+  schema: "airfare_reference",
+  description: "Curated Moroccan travel-demand event calendar — the multi-source seam that makes the seasonal/anomaly layers event-aware (docs/warehouse.md layer #5). Grain: one row per event OCCURRENCE (a specific year's Ramadan, Eid, etc.). Deliberately scoped to the demand drivers of a US→Morocco diaspora leisure route: the LUNAR religious events (Ramadan window + the Eid family-visit peaks + Mawlid/Hijra markers) that DRIFT ~11 days/yr against the Gregorian calendar — the marquee wrinkle a month-of-year seasonal baseline structurally cannot capture — plus the FIXED summer school-holiday window (the big leisure peak already visible in the fares). Single-day civic holidays (Throne Day, Green March, Independence Day) are intentionally excluded: low leisure-travel signal for this route, and they'd add breadth over depth.\n\nSHAPE: point events (Eid, Mawlid, Hijra New Year) get start_date = end_date and are consumed as SIGNED days-to-event; windows (Ramadan, summer school) get a real span and are consumed as in_window flags — never conflate a month-long fast with a one-day feast (int_event_context keeps them distinct).\n\nPROVENANCE: dates curated from timeanddate.com / publicholidays.africa / holidays-info.com (Morocco). LUNAR dates depend on moon sighting and may differ from the observed Moroccan date by ±1 day; the summer school-holiday window is APPROXIMATE (public-school break, ~early Jul–early Sep). Static data-as-code (user decision 2026-07-12) — deterministic, no API budget, reproducible; lunar dates are publishable years ahead. Refresh the far-out years as observed dates firm up.",
+  bigquery: {
+    clusterBy: ["event_category", "calendar_year"]
+  },
+  assertions: {
+    uniqueKey: ["event_id"],
+    nonNull: ["event_id", "event_category", "start_date", "end_date"],
+    rowConditions: [
+      "end_date >= start_date",
+      "start_date >= DATE '2025-01-01' AND start_date < DATE '2029-01-01'"
+    ]
+  }
+}
+
+-- Raw curated occurrences: (id, category, start, end). end = start for point events.
+-- Derived attributes (name / shape / is_lunar / is_travel_peak) are computed below
+-- from the category so the literal rows stay compact and can't disagree with the
+-- classification.
+WITH events AS (
+  SELECT * FROM UNNEST([
+    -- Ramadan (holy month, window). Lower travel DURING (fasting at home); the
+    -- END triggers the Eid al-Fitr family-visit peak. Drifts ~11 days/yr earlier.
+    STRUCT('ramadan_2026' AS event_id, 'ramadan' AS event_category, DATE '2026-02-17' AS start_date, DATE '2026-03-19' AS end_date),
+    STRUCT('ramadan_2027', 'ramadan', DATE '2027-02-08', DATE '2027-03-09'),
+    STRUCT('ramadan_2028', 'ramadan', DATE '2028-01-28', DATE '2028-02-25'),
+
+    -- Eid al-Fitr (end of Ramadan) — a marquee diaspora travel peak (point).
+    STRUCT('eid_al_fitr_2026', 'eid_al_fitr', DATE '2026-03-20', DATE '2026-03-20'),
+    STRUCT('eid_al_fitr_2027', 'eid_al_fitr', DATE '2027-03-10', DATE '2027-03-10'),
+    STRUCT('eid_al_fitr_2028', 'eid_al_fitr', DATE '2028-02-26', DATE '2028-02-26'),
+
+    -- Eid al-Adha (Feast of Sacrifice) — the other major family-visit peak (point).
+    STRUCT('eid_al_adha_2026', 'eid_al_adha', DATE '2026-05-27', DATE '2026-05-27'),
+    STRUCT('eid_al_adha_2027', 'eid_al_adha', DATE '2027-05-17', DATE '2027-05-17'),
+    STRUCT('eid_al_adha_2028', 'eid_al_adha', DATE '2028-05-05', DATE '2028-05-05'),
+
+    -- Mawlid (Prophet's Birthday) — secondary lunar marker (point).
+    STRUCT('mawlid_2026', 'mawlid', DATE '2026-08-25', DATE '2026-08-25'),
+    STRUCT('mawlid_2027', 'mawlid', DATE '2027-08-15', DATE '2027-08-15'),
+    STRUCT('mawlid_2028', 'mawlid', DATE '2028-08-04', DATE '2028-08-04'),
+
+    -- Hijra (Islamic) New Year — minor lunar marker, anchors the drift story (point).
+    STRUCT('hijra_new_year_2026', 'hijra_new_year', DATE '2026-06-17', DATE '2026-06-17'),
+    STRUCT('hijra_new_year_2027', 'hijra_new_year', DATE '2027-06-06', DATE '2027-06-06'),
+    STRUCT('hijra_new_year_2028', 'hijra_new_year', DATE '2028-05-26', DATE '2028-05-26'),
+
+    -- Summer school holiday (fixed-calendar leisure peak, window; approximate span).
+    STRUCT('summer_school_holiday_2026', 'summer_school_holiday', DATE '2026-07-05', DATE '2026-09-05'),
+    STRUCT('summer_school_holiday_2027', 'summer_school_holiday', DATE '2027-07-05', DATE '2027-09-05'),
+    STRUCT('summer_school_holiday_2028', 'summer_school_holiday', DATE '2028-07-05', DATE '2028-09-05')
+  ])
+)
+
+SELECT
+  event_id,
+  event_category,
+  CASE event_category
+    WHEN 'ramadan' THEN 'Ramadan'
+    WHEN 'eid_al_fitr' THEN 'Eid al-Fitr'
+    WHEN 'eid_al_adha' THEN 'Eid al-Adha'
+    WHEN 'mawlid' THEN "Mawlid (Prophet's Birthday)"
+    WHEN 'hijra_new_year' THEN 'Hijra New Year'
+    WHEN 'summer_school_holiday' THEN 'Summer school holiday'
+  END AS event_name,
+  start_date,
+  end_date,
+  IF(start_date = end_date, 'point', 'window') AS event_shape,
+  DATE_DIFF(end_date, start_date, DAY) + 1 AS duration_days,
+  -- Lunar events drift ~11 days/yr against the Gregorian calendar — the reason a
+  -- month-of-year seasonal baseline can't see them and an event-relative one can.
+  event_category IN ('ramadan', 'eid_al_fitr', 'eid_al_adha', 'mawlid', 'hijra_new_year') AS is_lunar,
+  -- The high-demand drivers for this route (Eid family visits + summer leisure),
+  -- vs the minor lunar markers — lets the correlation view focus on peaks.
+  event_category IN ('eid_al_fitr', 'eid_al_adha', 'summer_school_holiday') AS is_travel_peak,
+  EXTRACT(YEAR FROM start_date) AS calendar_year
+FROM events

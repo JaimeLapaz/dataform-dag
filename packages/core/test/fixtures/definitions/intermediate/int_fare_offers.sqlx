@@ -1,0 +1,102 @@
+config {
+  type: "incremental",
+  tags: ["intermediate"],
+  schema: "airfare_intermediate",
+  description: "One row per priced OFFER (grain: snapshot_date × outbound_date × return_date × offer_list × offer_index) — the analytical unit for booking-curve, dispersion, and residual-anomaly work. Rolls up the outbound legs from stg_fare_offers into offer-level microstructure (routing path, connecting hub, stop count, carriers, departure timing) and adds the derived trip axes (days_to_departure, stay_length) that constraint #3 forbids computing at ingestion. NOTE: an offer's legs describe the OUTBOUND journey only — Google Flights returns return options behind a departure_token we never call (constraint #1) — but offer_price is the full ROUND-TRIP total. Incremental by snapshot_date.",
+  uniqueKey: ["snapshot_date", "outbound_date", "return_date", "offer_list", "offer_index"],
+  bigquery: {
+    partitionBy: "snapshot_date",
+    clusterBy: ["days_to_departure", "primary_hub"]
+    // No updatePartitionFilter — see stg_fare_snapshots for the rationale.
+  },
+  assertions: {
+    uniqueKey: ["snapshot_date", "outbound_date", "return_date", "offer_list", "offer_index"]
+  },
+  columns: {
+    days_to_departure: "Derived lead time: outbound_date - snapshot_date (DAY). The booking-curve x-axis. Derived from dates here, never trusted from the request's advance_days (a later assertion checks they agree).",
+    stay_length_days: "Derived trip length: return_date - outbound_date (DAY).",
+    offer_price: "Full ROUND-TRIP total price for this itinerary (USD). Attached to the outbound offer; there is no separate return price.",
+    stop_count: "Outbound connections = n_legs - 1. ATL–CMN has no nonstop, so always >= 1.",
+    routing_path: "Outbound airport path, e.g. 'ATL-YUL-CMN'.",
+    primary_hub: "First connecting airport on the outbound (NULL only if nonstop, which never happens on this route).",
+    origin_departure_time: "Local departure DATETIME of the first outbound leg (time-of-day microstructure).",
+    operating_carriers: "Distinct operating carriers across the outbound legs.",
+    primary_operating_carrier: "Operating carrier of the first outbound leg."
+  }
+}
+
+WITH legs AS (
+  SELECT *
+  FROM ${ref("stg_fare_offers")}
+  -- Reprocess the boundary partition (idempotent via MERGE + uniqueKey); scans
+  -- only new/boundary partitions, never the whole table (constraint #2).
+  ${when(incremental(),
+    `WHERE snapshot_date >= (SELECT MAX(snapshot_date) FROM ${self()})`)}
+),
+
+offers AS (
+  SELECT
+    -- Identity / grain
+    snapshot_date,
+    MAX(captured_at) AS captured_at,
+    origin,
+    destination,
+    outbound_date,
+    return_date,
+    offer_list,
+    offer_index,
+
+    -- Derived trip axes (constraint #3: computed here, not at ingestion)
+    DATE_DIFF(outbound_date, snapshot_date, DAY) AS days_to_departure,
+    DATE_DIFF(return_date, outbound_date, DAY) AS stay_length_days,
+
+    -- Price (round-trip total) + offer attributes
+    MAX(offer_price) AS offer_price,
+    ANY_VALUE(currency) AS currency,
+    ANY_VALUE(offer_type) AS offer_type,
+    MAX(total_duration_min) AS outbound_duration_min,
+    MAX(carbon_emissions_g) AS carbon_emissions_g,
+    ANY_VALUE(departure_token) AS departure_token,
+
+    -- Routing microstructure (outbound)
+    COUNT(*) AS n_legs,
+    COUNT(*) - 1 AS stop_count,
+    ARRAY_TO_STRING(
+      ARRAY_CONCAT(
+        [ARRAY_AGG(leg_departure_airport ORDER BY leg_index LIMIT 1)[OFFSET(0)]],
+        ARRAY_AGG(leg_arrival_airport ORDER BY leg_index)
+      ), '-'
+    ) AS routing_path,
+    IF(COUNT(*) > 1,
+       ARRAY_AGG(leg_arrival_airport ORDER BY leg_index)[OFFSET(0)],
+       NULL) AS primary_hub,
+
+    -- Carriers / aircraft
+    ARRAY_AGG(leg_airline ORDER BY leg_index LIMIT 1)[OFFSET(0)] AS primary_operating_carrier,
+    STRING_AGG(DISTINCT leg_airline, ', ') AS operating_carriers,
+    ARRAY_AGG(
+      SPLIT(leg_flight_number, ' ')[SAFE_OFFSET(0)] ORDER BY leg_index LIMIT 1
+    )[OFFSET(0)] AS primary_marketing_carrier,
+    STRING_AGG(DISTINCT leg_airplane, ', ') AS aircraft_types,
+
+    -- Timing microstructure
+    ARRAY_AGG(leg_departure_time ORDER BY leg_index LIMIT 1)[OFFSET(0)] AS origin_departure_time,
+    ARRAY_AGG(leg_arrival_time ORDER BY leg_index DESC LIMIT 1)[OFFSET(0)] AS destination_arrival_time,
+    EXTRACT(DAYOFWEEK FROM outbound_date) AS outbound_dow
+  FROM legs
+  GROUP BY snapshot_date, origin, destination, outbound_date, return_date, offer_list, offer_index
+)
+
+SELECT
+  *,
+  EXTRACT(HOUR FROM origin_departure_time) AS origin_departure_hour,
+  -- NULL-safe: an unparseable departure time stays NULL rather than silently
+  -- mislabeling as 'red_eye'.
+  CASE
+    WHEN origin_departure_time IS NULL THEN NULL
+    WHEN EXTRACT(HOUR FROM origin_departure_time) BETWEEN 5 AND 11 THEN 'morning'
+    WHEN EXTRACT(HOUR FROM origin_departure_time) BETWEEN 12 AND 16 THEN 'afternoon'
+    WHEN EXTRACT(HOUR FROM origin_departure_time) BETWEEN 17 AND 21 THEN 'evening'
+    ELSE 'red_eye'
+  END AS departure_time_bucket
+FROM offers

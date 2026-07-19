@@ -1,0 +1,46 @@
+config {
+  type: "view",
+  tags: ["marts", "anomaly", "events"],
+  schema: "airfare_marts",
+  description: "THE event-correlation surface (docs/warehouse.md layer #5, the marquee lunar-drift wrinkle): fct_fare_anomaly enriched with each departure's Moroccan-event context, so a consumer can ask 'do the fare residuals spike near Ramadan/Eid?' — the whole reason the DAG is multi-source. A thin VIEW joining the centerpiece fact to int_event_context on outbound_date; adds no modeling, changes no z-score.\n\nWHY A CORRELATION VIEW, NOT AN EVENT PREDICTOR: the honest expected surface stays the joint (lead × month) cell mean (fct_fare_anomaly). Folding event proximity INTO the expectation would need many independent anchors spanning each lunar phase — which accumulate over a year (maturity discipline, docs/decisions.md). Until then this view lets the event effect be OBSERVED and charted against residuals without over-fitting a sparse predictor.\n\nMATURITY TODAY: fct_fare_anomaly is still ~all 'insufficient_data' (cells anchor-sparse), so is_anomaly is mostly FALSE and the event correlation is not yet statistically testable — but the plumbing is live and one anchor (2027-02-15) already sits inside Ramadan 2027, so the surface fills as the panel rolls forward. CONSUMER NOTE (inherited): every re-observation is a row and one anchor's episode spans many rows — dedup to anchor-episodes before counting anomalies-near-events.",
+  columns: {
+    z_score: "Residual z vs the leave-one-out joint-cell expectation (NULL until the cell can score). See fct_fare_anomaly.",
+    is_anomaly: "Reliable cell AND |z| >= threshold. Correlate the TRUE rows against the event columns.",
+    in_ramadan: "Departure inside a Ramadan window.",
+    days_to_nearest_eid: "Signed days departure→nearest Eid; the marquee demand-proximity axis to plot residuals against.",
+    eid_proximity: "Coarse Eid travel zone (arrive_for_eid / pre_eid_month / post_eid / off_peak)."
+  }
+}
+
+SELECT
+  -- Anomaly fact (grain: default-stay trip-observation)
+  f.snapshot_date,
+  f.outbound_date,
+  f.return_date,
+  f.days_to_departure,
+  f.lead_time_bucket,
+  f.departure_month,
+  f.observed_fare,
+  f.expected_fare,
+  f.residual_usd,
+  f.z_score,
+  f.z_score_log,
+  f.n_observations,
+  f.n_distinct_anchors,
+  f.cell_is_reliable,
+  f.is_anomaly,
+  f.anomaly_direction,
+  f.score_status,
+
+  -- Event context of the departure (from int_event_context, keyed on outbound_date)
+  e.in_ramadan,
+  e.in_summer_school_holiday,
+  e.days_to_nearest_eid,
+  e.nearest_eid_category,
+  e.nearest_eid_date,
+  e.eid_proximity,
+  e.days_to_nearest_point_event,
+  e.nearest_point_event_category,
+  e.nearest_point_event_is_peak
+FROM ${ref("fct_fare_anomaly")} f
+LEFT JOIN ${ref("int_event_context")} e USING (outbound_date)

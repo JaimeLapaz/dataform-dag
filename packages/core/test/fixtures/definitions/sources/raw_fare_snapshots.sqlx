@@ -1,0 +1,20 @@
+config {
+  type: "declaration",
+  database: "airfare-drift",
+  schema: "airfare_raw",
+  name: "fare_snapshots",
+  description: "Raw, append-only SerpApi Google Flights responses for the ATL–CMN panel. One row per panel query per run; `raw_response` holds the full API body verbatim (STRING). Deliberately messy: duplicate/late snapshots and the deeply-nested offer arrays are preserved here — all parsing/dedup happens downstream in staging (constraint #3). Partitioned by `snapshot_date`, clustered by (origin, destination).",
+  columns: {
+    captured_at: "Per-row wall-clock time the fetch completed (UTC TIMESTAMP). Used to pick the latest of duplicate snapshots during dedup.",
+    snapshot_date: "Ingestion-run date (DATE), fixed at run start so all of a run's rows share one partition. The observation date for the booking curve.",
+    origin: "Requested departure airport IATA code (always ATL post-pivot).",
+    destination: "Requested arrival airport IATA code (always CMN post-pivot).",
+    outbound_date: "Requested departure date (DATE) — a panel anchor.",
+    return_date: "Requested return date (DATE).",
+    advance_days: "Request-time lead: outbound_date - snapshot_date. REQUEST METADATA — downstream derives its own days_to_departure and asserts they agree.",
+    return_gap_days: "Request-time stay length: return_date - outbound_date. Request metadata.",
+    currency: "Requested currency (always USD).",
+    http_status: "SerpApi HTTP status. 200 = success; non-200 = captured error body; NULL = transport-level failure (raw_response starts with 'REQUEST_ERROR:'). Staging treats non-200/NULL as a failed fetch.",
+    raw_response: "Full API response body as-is (STRING). JSON on success; a 'REQUEST_ERROR: ...' string on transport failure."
+  }
+}

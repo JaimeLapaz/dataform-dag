@@ -1,0 +1,77 @@
+config {
+  type: "view",
+  tags: ["intermediate", "baseline"],
+  schema: "airfare_intermediate",
+  description: "The JOINT expectation surface: expected CHEAPEST fare per (lead_time_bucket × departure_month) cell (grain: one row per joint cell) for the DEFAULT-STAY product. This is the honest expected surface the residual model scores against — booking_curve_baseline and seasonal_baseline are its two marginals (summed over month / over lead), useful for EDA but BIASED as a predictor because the panel makes lead & month collinear (a mid-July snapshot forces Aug=short-lead, spring=long-lead). Exposing the joint cell lets Looker render the booking-curve HEATMAP (lead × month → mean fare) directly instead of reconstructing it from marginals. Sums the additive sufficient stats of int_daily_fare_stats by (lead_bucket_min, departure_month) — no history rescan; the LOO per-observation variant lives in fct_fare_anomaly. MATURITY: is_reliable gates on DISTINCT ANCHORS (independent trips), not n_observations (the panel re-observes each anchor). Today the surface is DIAGONAL and sparse — that collinearity is exactly why the joint model exists, so the sparse diagonal is the visual argument, not a defect. stddev_fare NULL when n_observations < 2.",
+  columns: {
+    lead_bucket_min: "Integer lower bound of the lead-time bucket (heatmap X join key; same includes/lead_time logic as observations).",
+    lead_time_bucket: "Human-readable lead-time range, e.g. '60-89'.",
+    departure_month: "Month of the departure date (1-12), month-of-year so it reads as seasonality (heatmap Y).",
+    month_name: "Human-readable month.",
+    n_observations: "Trip-OBSERVATIONS pooled into this cell (inflated by panel re-observation — not an independent-sample count).",
+    n_distinct_anchors: "Distinct departure dates (independent trips) in this cell. The honest sample size; drives is_reliable.",
+    mean_fare: "Expected (mean) cheapest fare for this joint cell — the heatmap color metric.",
+    stddev_fare: "Sample standard deviation (n-1). NULL when n_observations < 2.",
+    geomean_fare: "Geometric mean cheapest fare (log-space center; fares are heavy-tailed).",
+    is_reliable: "n_distinct_anchors >= threshold — conservative gate for trusting this cell's expectation."
+  }
+}
+
+WITH moments AS (
+  SELECT
+    lead_bucket_min,
+    departure_month,
+    SUM(n_observations) AS n_observations,
+    COUNT(DISTINCT snapshot_date) AS n_snapshots,
+    SUM(sum_fare) AS sum_fare,
+    SUM(sum_sq_fare) AS sum_sq_fare,
+    MIN(min_fare) AS min_fare,
+    MAX(max_fare) AS max_fare,
+    SUM(sum_ln_fare) AS sum_ln_fare
+  FROM ${ref("int_daily_fare_stats")}
+  GROUP BY lead_bucket_min, departure_month
+),
+
+-- Independent-sample count: distinct anchors, NOT additively recoverable from the
+-- summed stats, so computed straight from the small trip grain (same gate the
+-- residual model and both marginal baselines use).
+anchors AS (
+  SELECT
+    lead_bucket_min,
+    EXTRACT(MONTH FROM outbound_date) AS departure_month,
+    COUNT(DISTINCT outbound_date) AS n_distinct_anchors
+  FROM ${ref("int_trip_fares")}
+  WHERE lead_bucket_min IS NOT NULL
+    AND stay_length_days = ${dataform.projectConfig.vars.default_stay_days}
+  GROUP BY lead_bucket_min, departure_month
+)
+
+SELECT
+  m.lead_bucket_min,
+  ${lead_time.labelFromMin("m.lead_bucket_min")} AS lead_time_bucket,
+  m.departure_month,
+  CASE m.departure_month
+    WHEN 1 THEN 'Jan' WHEN 2 THEN 'Feb' WHEN 3 THEN 'Mar' WHEN 4 THEN 'Apr'
+    WHEN 5 THEN 'May' WHEN 6 THEN 'Jun' WHEN 7 THEN 'Jul' WHEN 8 THEN 'Aug'
+    WHEN 9 THEN 'Sep' WHEN 10 THEN 'Oct' WHEN 11 THEN 'Nov' WHEN 12 THEN 'Dec'
+  END AS month_name,
+  m.n_observations,
+  COALESCE(a.n_distinct_anchors, 0) AS n_distinct_anchors,
+  m.n_snapshots,
+  SAFE_DIVIDE(m.sum_fare, m.n_observations) AS mean_fare,
+  IF(
+    m.n_observations >= 2,
+    SQRT(
+      GREATEST(0.0, SAFE_DIVIDE(m.sum_sq_fare, m.n_observations)
+                    - POW(SAFE_DIVIDE(m.sum_fare, m.n_observations), 2))
+      * m.n_observations / (m.n_observations - 1)
+    ),
+    NULL
+  ) AS stddev_fare,
+  EXP(SAFE_DIVIDE(m.sum_ln_fare, m.n_observations)) AS geomean_fare,
+  ROUND(m.min_fare, 2) AS min_fare,
+  ROUND(m.max_fare, 2) AS max_fare,
+  COALESCE(a.n_distinct_anchors, 0) >= ${anomaly.MIN_RELIABLE_ANCHORS} AS is_reliable
+FROM moments m
+LEFT JOIN anchors a USING (lead_bucket_min, departure_month)
+ORDER BY m.lead_bucket_min, m.departure_month

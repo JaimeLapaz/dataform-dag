@@ -1,0 +1,114 @@
+import dagre from "@dagrejs/dagre";
+import type { DataformNode, NodeType, SerializedGraph } from "@dataform-dag/core";
+
+/** Fill color per node type — the legend the whole UI shares. */
+export const NODE_COLORS: Record<NodeType, string> = {
+  source: "#6b7280",
+  table: "#2563eb",
+  view: "#16a34a",
+  incremental: "#ea580c",
+  assertion: "#dc2626",
+  operations: "#9333ea",
+};
+
+export interface FlowNode {
+  id: string;
+  position: { x: number; y: number };
+  data: { label: string; nodeType: NodeType; color: string };
+  width: number;
+  height: number;
+}
+export interface Point {
+  x: number;
+  y: number;
+}
+export interface FlowEdge {
+  id: string;
+  source: string;
+  target: string;
+  /** Routed polyline (start → bends → end) when a router (ELK) produced one; else undefined. */
+  points?: Point[];
+}
+export interface FlowGraph {
+  nodes: FlowNode[];
+  edges: FlowEdge[];
+}
+
+export const NODE_H = 46;
+const CHAR_W = 7.7; // ~monospace advance at 13px
+const NODE_PAD = 54; // left accent + horizontal padding
+
+/** Estimate a node's rendered width from its label so dagre spacing matches, and nothing truncates. */
+export function nodeWidth(label: string): number {
+  return Math.max(150, Math.round(label.length * CHAR_W) + NODE_PAD);
+}
+
+/**
+ * Lay a {@link SerializedGraph} out left-to-right with dagre and emit React Flow nodes/edges. Pure
+ * and DOM-free. An edge is drawn for every `ref` whose target node exists in the graph; a ref to an
+ * absent node (external/unresolved) is dropped rather than pointing at a phantom.
+ */
+export function layoutGraph(graph: SerializedGraph): FlowGraph {
+  const present = new Set(graph.nodes.map((n) => n.id));
+  const g = new dagre.graphlib.Graph();
+  // LR layered layout. Generous rank/node separation keeps the many cross-edges of a wide fact
+  // graph legible; tight-tree ranking pulls ranks together for fewer long edges.
+  g.setGraph({
+    rankdir: "LR",
+    ranker: "tight-tree",
+    nodesep: 40,
+    ranksep: 130,
+    edgesep: 20,
+    marginx: 24,
+    marginy: 24,
+  });
+  g.setDefaultEdgeLabel(() => ({}));
+  for (const node of graph.nodes) g.setNode(node.id, { width: nodeWidth(node.id), height: NODE_H });
+  const edges: FlowEdge[] = [];
+  for (const node of graph.nodes) {
+    for (const upstream of node.refs) {
+      if (!present.has(upstream)) continue;
+      g.setEdge(upstream, node.id);
+      edges.push({ id: `${upstream}->${node.id}`, source: upstream, target: node.id });
+    }
+  }
+  dagre.layout(g);
+  const nodes: FlowNode[] = graph.nodes.map((node) => {
+    const laid = g.node(node.id);
+    const width = nodeWidth(node.id);
+    return {
+      id: node.id,
+      // dagre centers nodes; React Flow positions by top-left corner.
+      position: { x: laid.x - width / 2, y: laid.y - NODE_H / 2 },
+      data: { label: node.id, nodeType: node.type, color: NODE_COLORS[node.type] },
+      width,
+      height: NODE_H,
+    };
+  });
+  return { nodes, edges };
+}
+
+/** Direct-neighbor lookups for the detail panel, built once from the wire form. */
+export interface GraphIndex {
+  byId: Map<string, DataformNode>;
+  downstream: Map<string, string[]>;
+}
+
+export function indexGraph(graph: SerializedGraph): GraphIndex {
+  return {
+    byId: new Map(graph.nodes.map((n) => [n.id, n])),
+    downstream: new Map(graph.downstream),
+  };
+}
+
+/** Direct upstream deps of a node that actually resolve to a node in the graph. */
+export function upstreamOf(index: GraphIndex, nodeId: string): string[] {
+  const node = index.byId.get(nodeId);
+  if (!node) return [];
+  return node.refs.filter((r) => index.byId.has(r));
+}
+
+/** Direct downstream dependents of a node. */
+export function downstreamOf(index: GraphIndex, nodeId: string): string[] {
+  return index.downstream.get(nodeId) ?? [];
+}

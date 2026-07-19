@@ -1,0 +1,19 @@
+{
+  "name": "dataform-dag",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Interactive local DAG viewer for a Dataform project — parsed from .sqlx files, no cloud connection required.",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build:core": "npm run build -w @dataform-dag/core",
+    "build:ui": "npm run build -w @dataform-dag/ui",
+    "test:core": "npm run test -w @dataform-dag/core",
+    "test:ui": "npm run test -w @dataform-dag/ui",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "dev:ui": "npm run dev -w @dataform-dag/ui",
+    "test": "npm run test --workspaces --if-present"
+  }
+}
