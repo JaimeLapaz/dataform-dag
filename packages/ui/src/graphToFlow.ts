@@ -112,3 +112,66 @@ export function upstreamOf(index: GraphIndex, nodeId: string): string[] {
 export function downstreamOf(index: GraphIndex, nodeId: string): string[] {
   return index.downstream.get(nodeId) ?? [];
 }
+
+export function filterGraphByTags(
+  graph: SerializedGraph,
+  selectedTags: string[],
+): SerializedGraph {
+  if (selectedTags.length === 0) {
+    return graph;
+  }
+
+  const nodes = graph.nodes.filter(
+    (node) =>
+      selectedTags.some((tag) =>
+        node.tags.includes(tag),
+      ),
+  );
+
+  const visibleIds = new Set(
+    nodes.map((node) => node.id),
+  );
+
+  const downstream: Array<
+    [string, string[]]
+  > = graph.downstream
+    .filter(([nodeId]) =>
+      visibleIds.has(nodeId),
+    )
+    .map(([nodeId, dependents]) => {
+      const visibleDependents =
+        dependents.filter((dependentId) =>
+          visibleIds.has(dependentId),
+        );
+
+      return [
+        nodeId,
+        visibleDependents,
+      ] as [string, string[]];
+    })
+    .filter(
+      ([, dependents]) =>
+        dependents.length > 0,
+    );
+
+  return {
+    nodes,
+    downstream,
+  };
+}
+
+export function graphTags(
+  graph: SerializedGraph,
+): string[] {
+  const tags = new Set<string>();
+
+  for (const node of graph.nodes) {
+    for (const tag of node.tags) {
+      tags.add(tag);
+    }
+  }
+
+  return [...tags].sort((a, b) =>
+    a.localeCompare(b),
+  );
+}

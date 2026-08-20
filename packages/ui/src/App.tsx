@@ -1,8 +1,15 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { DataformNode } from "@dataform-dag/core";
 import type { HostBridge } from "./HostBridge.js";
 import { useHostBridge } from "./useHostBridge.js";
-import { NODE_COLORS, downstreamOf, indexGraph, upstreamOf } from "./graphToFlow.js";
+import {
+  NODE_COLORS,
+  downstreamOf,
+  filterGraphByTags,
+  graphTags,
+  indexGraph,
+  upstreamOf,
+} from "./graphToFlow.js";
 import { useLayout } from "./useLayout.js";
 import { DagGraph } from "./DagGraph.js";
 import { NodeDetailPanel } from "./NodeDetailPanel.js";
@@ -16,9 +23,53 @@ export interface AppProps {
 export function App({ bridge }: AppProps): JSX.Element {
   const { graph, focusRequest, compilationStatus, compiledSql, compiledSqlError } = useHostBridge(bridge);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const toggleTag = (tag: string): void => {
+    setSelectedTags((current) =>
+      current.includes(tag)
+        ? current.filter(
+          (item) => item !== tag,
+        )
+        : [...current, tag],
+    );
+    setSelectedId(null);
+  };
+  const clearTags = (): void => {
+    setSelectedTags([]);
+    setSelectedId(null);
+  };
   const { capabilities } = bridge;
-  const flow = useLayout(graph);
-  const index = useMemo(() => (graph ? indexGraph(graph) : null), [graph]);
+
+  const availableTags = useMemo(
+    () =>
+      graph
+        ? graphTags(graph)
+        : [],
+    [graph],
+  );
+
+  const filteredGraph = useMemo(
+    () =>
+      graph
+        ? filterGraphByTags(
+          graph,
+          selectedTags,
+        )
+        : null,
+    [graph, selectedTags],
+  );
+
+  const flow =
+    useLayout(filteredGraph);
+
+  const index = useMemo(
+    () =>
+      filteredGraph
+        ? indexGraph(filteredGraph)
+        : null,
+    [filteredGraph],
+  );
+
   const selected: DataformNode | null =
     (index && selectedId && index.byId.get(selectedId)) || null;
   return (
@@ -26,8 +77,66 @@ export function App({ bridge }: AppProps): JSX.Element {
       <header className="ddag-topbar">
         <h1 className="ddag-topbar__title">dataform-dag</h1>
         <Legend />
+        {graph && availableTags.length > 0 && (
+          <div className="ddag-tag-filter">
+            <span className="ddag-tag-filter__label">
+              Tags
+            </span>
+
+            <div className="ddag-tag-filter__chips">
+              {availableTags.map((tag) => {
+                const selected =
+                  selectedTags.includes(tag);
+
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    className={[
+                      "ddag-tag-chip",
+                      selected
+                        ? "ddag-tag-chip--selected"
+                        : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    aria-pressed={selected}
+                    onClick={() => toggleTag(tag)}
+                  >
+                    {selected && (
+                      <span
+                        className="ddag-tag-chip__check"
+                        aria-hidden="true"
+                      >
+                        ✓
+                      </span>
+                    )}
+
+                    {tag}
+                  </button>
+                );
+              })}
+            </div>
+
+            {selectedTags.length > 0 && (
+              <button
+                type="button"
+                className="ddag-tag-filter__clear"
+                onClick={clearTags}
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        )}
         <div className="ddag-topbar__spacer" />
-        {graph && <span className="ddag-topbar__count">{graph.nodes.length} nodes</span>}
+        {graph && filteredGraph && (
+          <span className="ddag-topbar__count">
+            {selectedTags.length > 0
+              ? `${filteredGraph.nodes.length} / ${graph.nodes.length} nodes`
+              : `${graph.nodes.length} nodes`}
+          </span>
+        )}
         {!capabilities.liveWatch && (
           <button
             type="button"
@@ -85,22 +194,22 @@ export function App({ bridge }: AppProps): JSX.Element {
             onOpenFile={
               capabilities.openFile
                 ? (node) =>
-                    bridge.send({
-                      type: "openFile",
-                      nodeId: node.id,
-                      filePath: node.filePath,
-                    })
+                  bridge.send({
+                    type: "openFile",
+                    nodeId: node.id,
+                    filePath: node.filePath,
+                  })
                 : undefined
             }
 
             onShowCompiledSql={
               capabilities.compiledSql
                 ? (node) =>
-                    bridge.send({
-                      type: "showCompiledSql",
-                      nodeId: node.id,
-                      filePath: node.filePath,
-                    })
+                  bridge.send({
+                    type: "showCompiledSql",
+                    nodeId: node.id,
+                    filePath: node.filePath,
+                  })
                 : undefined
             }
           />
