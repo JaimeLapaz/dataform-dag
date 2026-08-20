@@ -1,10 +1,19 @@
 import { useEffect, useState } from "react";
-import type { HostBridge, SerializedGraph } from "./HostBridge.js";
+import type {
+  CompilationStatus,
+  HostBridge,
+  SerializedGraph,
+} from "./HostBridge.js";
 
 export interface HostBridgeState {
   graph: SerializedGraph | null;
-  /** The node the host last asked to focus (e.g. active editor changed). Cleared after consumption. */
-  focusRequest: { nodeId: string; nonce: number } | null;
+
+  focusRequest: {
+    nodeId: string;
+    nonce: number;
+  } | null;
+
+  compilationStatus: CompilationStatus;
 }
 
 /**
@@ -15,14 +24,31 @@ export interface HostBridgeState {
 export function useHostBridge(bridge: HostBridge): HostBridgeState {
   const [graph, setGraph] = useState<SerializedGraph | null>(null);
   const [focusRequest, setFocusRequest] = useState<HostBridgeState["focusRequest"]>(null);
+  const [compilationStatus, setCompilationStatus] = useState<CompilationStatus>("idle");
+
   useEffect(() => {
     let nonce = 0;
-    const unsubscribe = bridge.onMessage((msg) => {
-      if (msg.type === "graphUpdate") setGraph(msg.graph);
-      else if (msg.type === "focusNode") setFocusRequest({ nodeId: msg.nodeId, nonce: ++nonce });
-    });
+    const unsubscribe =
+      bridge.onMessage((msg) => {
+        if (msg.type === "graphUpdate") {
+          setGraph(msg.graph);
+        } else if (msg.type === "focusNode") {
+          setFocusRequest({
+            nodeId: msg.nodeId,
+            nonce: ++nonce,
+          });
+        } else if (
+          msg.type === "compilationStatus"
+        ) {
+          setCompilationStatus(msg.status);
+        }
+      });
     bridge.send({ type: "ready" });
     return unsubscribe;
   }, [bridge]);
-  return { graph, focusRequest };
+  return {
+    graph,
+    focusRequest,
+    compilationStatus,
+  };
 }

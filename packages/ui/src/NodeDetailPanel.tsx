@@ -1,5 +1,8 @@
 import type { DataformNode } from "@dataform-dag/core";
 import { NODE_COLORS } from "./graphToFlow.js";
+import type {
+  CompilationStatus,
+} from "./HostBridge.js";
 
 export interface NodeDetailPanelProps {
   node: DataformNode;
@@ -9,6 +12,8 @@ export interface NodeDetailPanelProps {
   onOpenFile?: (node: DataformNode) => void;
 
   onShowCompiledSql?: (node: DataformNode) => void;
+
+  compilationStatus?: CompilationStatus;
 
   onSelect: (nodeId: string) => void;
 }
@@ -20,6 +25,7 @@ export function NodeDetailPanel({
   downstream,
   onOpenFile,
   onShowCompiledSql,
+  compilationStatus,
   onSelect,
 }: NodeDetailPanelProps): JSX.Element {
   return (
@@ -43,28 +49,55 @@ export function NodeDetailPanel({
       <NeighborList title="Upstream (depends on)" ids={upstream} onSelect={onSelect} />
       <NeighborList title="Downstream (dependents)" ids={downstream} onSelect={onSelect} />
       {(onOpenFile || onShowCompiledSql) && (
-  <div className="ddag-detail__actions">
-    {onOpenFile && (
-      <button
-        type="button"
-        className="ddag-btn"
-        onClick={() => onOpenFile(node)}
-      >
-        Go to file
-      </button>
-    )}
+        <div className="ddag-detail__actions">
+          {onOpenFile && (
+            <button
+              type="button"
+              className="ddag-btn"
+              onClick={() => onOpenFile(node)}
+            >
+              Go to file
+            </button>
+          )}
 
-    {onShowCompiledSql && (
-      <button
-        type="button"
-        className="ddag-btn"
-        onClick={() => onShowCompiledSql(node)}
-      >
-        Compiled SQL
-      </button>
-    )}
-  </div>
-)}
+          {onShowCompiledSql && (
+            <button
+              type="button"
+              className="ddag-btn"
+              onClick={() =>
+                onShowCompiledSql(node)
+              }
+            >
+              Compiled SQL
+            </button>
+          )}
+
+          {onShowCompiledSql &&
+            compilationStatus &&
+            compilationStatus !== "idle" && (
+              <span
+                className={[
+                  "ddag-compilation-status",
+                  `ddag-compilation-status--${compilationStatus}`,
+                ].join(" ")}
+                role="status"
+                aria-live="polite"
+              >
+                {compilationStatus ===
+                  "compiling" &&
+                  "Compiling…"}
+
+                {compilationStatus ===
+                  "ready" &&
+                  "✓ Compiled"}
+
+                {compilationStatus ===
+                  "error" &&
+                  "Compilation failed"}
+              </span>
+            )}
+        </div>
+      )}
     </aside>
   );
 }

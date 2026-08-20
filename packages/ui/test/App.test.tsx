@@ -81,4 +81,53 @@ describe("App", () => {
     await userEvent.click(await screen.findByRole("button", { name: "select:mid" }));
     expect(screen.queryByRole("button", { name: "Go to file" })).not.toBeInTheDocument();
   });
+  it("shows compilation status for hosts that support compiled SQL", async () => {
+    const bridge = new MockBridge(
+      graph,
+      {
+        compiledSql: true,
+      },
+    );
+
+    render(
+      <App bridge={bridge} />,
+    );
+
+    await userEvent.click(
+      await screen.findByRole(
+        "button",
+        {
+          name: "select:mid",
+        },
+      ),
+    );
+
+    bridge.emit({
+      type: "compilationStatus",
+      status: "compiling",
+    });
+
+    expect(
+      await screen.findByText(
+        "Compiling…",
+      ),
+    ).toBeInTheDocument();
+
+    bridge.emit({
+      type: "compilationStatus",
+      status: "ready",
+    });
+
+    expect(
+      await screen.findByText(
+        "✓ Compiled",
+      ),
+    ).toBeInTheDocument();
+
+    expect(
+      screen.queryByText(
+        "Compiling…",
+      ),
+    ).not.toBeInTheDocument();
+  });
 });

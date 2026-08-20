@@ -281,6 +281,11 @@ class GraphController implements vscode.Disposable {
       this.compiledOutputCache &&
       this.compiledOutputCache.root === root
     ) {
+      this.post({
+        type: "compilationStatus",
+        status: "ready",
+      });
+
       return this.compiledOutputCache.output;
     }
 
@@ -292,11 +297,21 @@ class GraphController implements vscode.Disposable {
       this.compileInProgress &&
       this.compileInProgress.root === root
     ) {
+      this.post({
+        type: "compilationStatus",
+        status: "compiling",
+      });
+
       return this.compileInProgress.promise;
     }
 
     const generation =
       this.compilationGeneration;
+
+    this.post({
+      type: "compilationStatus",
+      status: "compiling",
+    });
 
     const promise =
       compileDataformProject(root);
@@ -312,30 +327,41 @@ class GraphController implements vscode.Disposable {
     try {
       const output = await promise;
 
-      /*
-      * Only cache the result if no relevant file changed
-      * while Dataform was compiling.
-      */
       if (
-        this.compilationGeneration === generation
+        this.compilationGeneration ===
+        generation
       ) {
         this.compiledOutputCache = {
           root,
           output,
         };
+
+        this.post({
+          type: "compilationStatus",
+          status: "ready",
+        });
       }
 
       return output;
+    } catch (error) {
+      if (
+        this.compilationGeneration ===
+        generation
+      ) {
+        this.post({
+          type: "compilationStatus",
+          status: "error",
+        });
+      }
+
+      throw error;
     } finally {
-      /*
-      * Don't clear a newer compilation that might have
-      * started while this one was finishing.
-      */
       if (
         this.compileInProgress ===
         currentCompilation
       ) {
-        this.compileInProgress = undefined;
+        this.compileInProgress =
+          undefined;
       }
     }
   }
@@ -345,15 +371,12 @@ class GraphController implements vscode.Disposable {
 
     this.compiledOutputCache = undefined;
 
-    /*
-    * We can't cancel the existing Dataform process with the
-    * current compiler implementation, but we stop considering
-    * it reusable.
-    *
-    * Its generation check will prevent its result from being
-    * cached when it eventually finishes.
-    */
     this.compileInProgress = undefined;
+
+    this.post({
+      type: "compilationStatus",
+      status: "idle",
+    });
   }
 
   private warmCompilationCache(

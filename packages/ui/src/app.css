@@ -195,12 +195,29 @@ body,
 .ddag-detail__actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   margin-top: 14px;
 }
 
 .ddag-detail__actions .ddag-btn {
   margin-top: 0;
+}
+
+.ddag-compilation-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.ddag-compilation-status--compiling {
+  font-style: italic;
+}
+
+.ddag-compilation-status--error {
+  opacity: 1;
 }
 .ddag-btn {
   background: #111827;

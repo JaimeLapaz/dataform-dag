@@ -14,7 +14,7 @@ export interface AppProps {
 
 /** Host-agnostic root. Knows nothing about which host embeds it — only {@link HostBridge}. */
 export function App({ bridge }: AppProps): JSX.Element {
-  const { graph, focusRequest } = useHostBridge(bridge);
+  const { graph, focusRequest, compilationStatus } = useHostBridge(bridge);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const { capabilities } = bridge;
   const flow = useLayout(graph);
@@ -58,6 +58,12 @@ export function App({ bridge }: AppProps): JSX.Element {
             downstream={downstreamOf(index, selected.id)}
             onSelect={setSelectedId}
 
+            compilationStatus={
+              capabilities.compiledSql
+                ? compilationStatus
+                : undefined
+            }
+
             onOpenFile={
               capabilities.openFile
                 ? (node) =>
@@ -79,6 +85,7 @@ export function App({ bridge }: AppProps): JSX.Element {
                     })
                 : undefined
             }
+            
           />
         )}
       </div>

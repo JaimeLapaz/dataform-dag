@@ -9,10 +9,20 @@ export type OutboundMsg =
   | { type: "showCompiledSql"; nodeId: string; filePath: string }
   | { type: "requestRefresh" };
 
-/** host → UI. */
+export type CompilationStatus =
+  | "idle"
+  | "compiling"
+  | "ready"
+  | "error";
+
+  /** host → UI. */
 export type InboundMsg =
   | { type: "graphUpdate"; graph: SerializedGraph }
-  | { type: "focusNode"; nodeId: string };
+  | { type: "focusNode"; nodeId: string }
+  | {
+      type: "compilationStatus";
+      status: CompilationStatus;
+    };
 
 /**
  * What a host can do. The UI reads these to decide what to render — a "Go to file" button only
