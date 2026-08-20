@@ -6,7 +6,6 @@ import {
   commands,
   lastActiveEditorHandler,
   lastPanel,
-  lastWatcher,
   records,
   resetMock,
   window,
@@ -17,15 +16,25 @@ import {
 // orchestration (routing / watcher wiring / focus mapping / error handling), not core itself.
 vi.mock("@dataform-dag/core", () => ({
   NodeFileSource: class {
-    constructor(public readonly root: string) {}
+    constructor(public readonly root: string) { }
   },
+
   buildGraphFromWorkspace: vi.fn(),
   serializeGraph: vi.fn(),
+
+  compileDataformProject: vi.fn(),
+  findCompiledActionByFile: vi.fn(),
 }));
-import { buildGraphFromWorkspace, serializeGraph } from "@dataform-dag/core";
+import {
+  buildGraphFromWorkspace,
+  serializeGraph,
+  compileDataformProject,
+} from "@dataform-dag/core";
 
 const buildMock = buildGraphFromWorkspace as unknown as Mock;
 const serializeMock = serializeGraph as unknown as Mock;
+const compileMock =
+  compileDataformProject as unknown as Mock;
 
 /** A serialized graph with two nodes, so focus mapping (filePath → id) has something to resolve. */
 const SERIALIZED = {
@@ -49,24 +58,68 @@ function activateAndShow() {
   return context;
 }
 
+function watcherFor(glob: string) {
+  const watcher = records.watchers.find(
+    (candidate) => candidate.glob === glob,
+  );
+
+  if (!watcher) {
+    throw new Error(
+      `Watcher not found for glob: ${glob}`,
+    );
+  }
+
+  return watcher;
+}
+
 beforeEach(() => {
   resetMock();
+
   buildMock.mockReset();
   serializeMock.mockReset();
-  buildMock.mockResolvedValue({ nodes: new Map(), edges: [] });
-  serializeMock.mockReturnValue(SERIALIZED);
-  workspace.workspaceFolders = [{ uri: { fsPath: "/proj" } }];
+  compileMock.mockReset();
+
+  buildMock.mockResolvedValue({
+    nodes: new Map(),
+    edges: [],
+  });
+
+  serializeMock.mockReturnValue(
+    SERIALIZED,
+  );
+
+  compileMock.mockResolvedValue({
+    tables: [],
+    operations: [],
+    assertions: [],
+    declarations: [],
+  });
+
+  workspace.workspaceFolders = [
+    {
+      uri: {
+        fsPath: "/proj",
+      },
+    },
+  ];
 });
 
 describe("activate", () => {
-  it("registers the showGraph command and pushes disposables", () => {
+  it("registers the commands and pushes disposables", () => {
     const context = activateAndShow();
+
     expect(commands.registerCommand).toHaveBeenCalledWith(
       "dataformDag.showGraph",
       expect.any(Function),
     );
-    // command disposable + the controller itself
-    expect(context.subscriptions).toHaveLength(2);
+
+    expect(commands.registerCommand).toHaveBeenCalledWith(
+      "dataformDag.showCompiledSql",
+      expect.any(Function),
+    );
+
+    // showGraph + showCompiledSql + controller
+    expect(context.subscriptions).toHaveLength(3);
   });
 });
 
@@ -159,13 +212,49 @@ describe("buildAndPost", () => {
 describe("watcher wiring", () => {
   it("watches **/*.sqlx and rebuilds on change, create, and delete", async () => {
     activateAndShow();
-    expect(lastWatcher().glob).toBe("**/*.sqlx");
 
-    lastWatcher().emitChange();
-    lastWatcher().emitCreate();
-    lastWatcher().emitDelete();
+    const sqlxWatcher =
+      watcherFor("**/*.sqlx");
 
-    await vi.waitFor(() => expect(buildMock).toHaveBeenCalledTimes(3));
+    expect(sqlxWatcher.glob).toBe(
+      "**/*.sqlx",
+    );
+
+    sqlxWatcher.emitChange();
+    sqlxWatcher.emitCreate();
+    sqlxWatcher.emitDelete();
+
+    await vi.waitFor(() =>
+      expect(buildMock).toHaveBeenCalledTimes(3),
+    );
+  });
+
+  it("watches files that can affect compiled SQL", () => {
+    activateAndShow();
+
+    expect(
+      watcherFor("**/*.js"),
+    ).toBeDefined();
+
+    expect(
+      watcherFor("**/*.mjs"),
+    ).toBeDefined();
+
+    expect(
+      watcherFor("**/*.cjs"),
+    ).toBeDefined();
+
+    expect(
+      watcherFor("**/workflow_settings.yaml"),
+    ).toBeDefined();
+
+    expect(
+      watcherFor("**/workflow_settings.yml"),
+    ).toBeDefined();
+
+    expect(
+      watcherFor("**/dataform.json"),
+    ).toBeDefined();
   });
 });
 
@@ -196,13 +285,28 @@ describe("focusActive", () => {
 });
 
 describe("dispose", () => {
-  it("tears down the panel so a later show() opens a fresh one", () => {
+  it("tears down the panel and all watchers so a later show() opens a fresh one", () => {
     activateAndShow();
-    const watcher = lastWatcher();
-    lastPanel().emitDispose();
-    expect(watcher.dispose).toHaveBeenCalledTimes(1);
 
-    records.commands.get("dataformDag.showGraph")!();
-    expect(window.createWebviewPanel).toHaveBeenCalledTimes(2);
+    const watchers = [
+      ...records.watchers,
+    ];
+
+    expect(watchers.length).toBeGreaterThan(1);
+
+    lastPanel().emitDispose();
+
+    for (const watcher of watchers) {
+      expect(
+        watcher.dispose,
+      ).toHaveBeenCalledTimes(1);
+    }
+
+    records.commands
+      .get("dataformDag.showGraph")!();
+
+    expect(
+      window.createWebviewPanel,
+    ).toHaveBeenCalledTimes(2);
   });
 });

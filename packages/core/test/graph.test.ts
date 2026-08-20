@@ -5,6 +5,7 @@ import {
   getAncestors,
   getDescendants,
   serializeGraph,
+  parseSqlx,
   type DataformNode,
 } from "../src/index.js";
 
@@ -30,6 +31,47 @@ describe("buildGraph", () => {
     const g = buildGraph([node("x", ["missing"])]);
     expect(g.nodes.has("missing")).toBe(false);
     expect(getAncestors(g, "x").size).toBe(0); // traversal skips absent targets
+  });
+
+  it("connects operations using explicit dependencies and config.name", () => {
+    const prepare = parseSqlx(
+      "definitions/prepare_data.sqlx",
+      `
+        config {
+          type: "operations",
+          name: "load_raw_data"
+        }
+
+        SELECT 1;
+      `,
+    );
+
+    const process = parseSqlx(
+      "definitions/process_data.sqlx",
+      `
+        config {
+          type: "operations",
+          dependencies: ["load_raw_data"]
+        }
+
+        SELECT 2;
+      `,
+    );
+
+    const graph = buildGraph([
+      prepare,
+      process,
+    ]);
+
+    expect(
+      graph.downstreamMap.get(
+        "load_raw_data",
+      ),
+    ).toEqual(
+      new Set([
+        "process_data",
+      ]),
+    );
   });
 });
 

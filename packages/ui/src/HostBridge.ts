@@ -6,6 +6,7 @@ export type { SerializedGraph };
 export type OutboundMsg =
   | { type: "ready" }
   | { type: "openFile"; nodeId: string; filePath: string }
+  | { type: "showCompiledSql"; nodeId: string; filePath: string }
   | { type: "requestRefresh" };
 
 /** host → UI. */
@@ -20,6 +21,7 @@ export type InboundMsg =
  */
 export interface HostCapabilities {
   openFile: boolean;
+  compiledSql: boolean;
   liveWatch: boolean;
   focusOnActive: boolean;
 }

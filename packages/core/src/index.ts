@@ -16,8 +16,15 @@ export { type FileSource, NodeFileSource } from "./fileSource.js";
 export {
   type GraphSource,
   type CompileOutput,
+  type CompileAction,
+  type CompileTarget,
+
   ParsedGraphSource,
   CompiledGraphSource,
+
   buildGraphFromWorkspace,
   graphFromCompileOutput,
+
+  compileDataformProject,
+  findCompiledActionByFile,
 } from "./graphSource.js";

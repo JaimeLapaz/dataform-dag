@@ -45,18 +45,39 @@ export interface CompileOutput {
   assertions?: CompileAction[];
   declarations?: CompileAction[];
 }
-interface CompileTarget {
+
+export interface CompileTarget {
   name: string;
   schema?: string;
   database?: string;
 }
-interface CompileAction {
+
+export interface CompileAction {
   target: CompileTarget;
   type?: string;
   fileName?: string;
+
   tags?: string[] | null;
   dependencyTargets?: CompileTarget[] | null;
-  actionDescriptor?: { description?: string } | null;
+
+  // SQL compilado de tables/views/assertions.
+  query?: string;
+
+  // SQL compilado cuando la tabla es incremental.
+  incrementalQuery?: string;
+
+  // Las operations pueden contener varias queries.
+  queries?: string[] | null;
+
+  preOps?: string[] | null;
+  postOps?: string[] | null;
+
+  incrementalPreOps?: string[] | null;
+  incrementalPostOps?: string[] | null;
+
+  actionDescriptor?: {
+    description?: string;
+  } | null;
 }
 
 /**
@@ -110,6 +131,56 @@ const execFileAsync = promisify(execFile);
  * result. Node-only (spawns a process); requires the CLI and a compiling project. The exact graph
  * Dataform itself resolves — the reference the regex parser is measured against.
  */
+
+export async function compileDataformProject(
+  root: string,
+  command = "dataform",
+): Promise<CompileOutput> {
+  const { stdout } = await execFileAsync(
+    command,
+    ["compile", "--json"],
+    {
+      cwd: root,
+      maxBuffer: 64 * 1024 * 1024,
+
+      // Necesario para poder resolver correctamente
+      // el shim dataform.cmd de npm en Windows.
+      shell: process.platform === "win32",
+    },
+  );
+
+  return JSON.parse(stdout) as CompileOutput;
+}
+
+function normalizeFilePath(filePath: string): string {
+  return filePath
+    .replaceAll("\\", "/")
+    .replace(/^\.\/+/, "");
+}
+
+export function findCompiledActionByFile(
+  output: CompileOutput,
+  filePath: string,
+): CompileAction | undefined {
+  const wanted = normalizeFilePath(filePath);
+
+  // Ponemos tables primero porque una tabla puede generar
+  // assertions adicionales asociadas al mismo .sqlx.
+  const actions: CompileAction[] = [
+    ...(output.tables ?? []),
+    ...(output.operations ?? []),
+    ...(output.assertions ?? []),
+  ];
+
+  return actions.find((action) => {
+    if (!action.fileName) {
+      return false;
+    }
+
+    return normalizeFilePath(action.fileName) === wanted;
+  });
+}
+
 export class CompiledGraphSource implements GraphSource {
   constructor(
     private readonly root: string,
@@ -117,10 +188,11 @@ export class CompiledGraphSource implements GraphSource {
   ) {}
 
   async build(): Promise<DataformGraph> {
-    const { stdout } = await execFileAsync(this.command, ["compile", "--json"], {
-      cwd: this.root,
-      maxBuffer: 64 * 1024 * 1024,
-    });
-    return graphFromCompileOutput(JSON.parse(stdout) as CompileOutput);
+    const output = await compileDataformProject(
+      this.root,
+      this.command,
+    );
+
+    return graphFromCompileOutput(output);
   }
 }

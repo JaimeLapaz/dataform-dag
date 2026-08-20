@@ -5,8 +5,11 @@ export interface NodeDetailPanelProps {
   node: DataformNode;
   upstream: string[];
   downstream: string[];
-  /** Present only when the host advertises `openFile`; rendering is gated on it. */
+
   onOpenFile?: (node: DataformNode) => void;
+
+  onShowCompiledSql?: (node: DataformNode) => void;
+
   onSelect: (nodeId: string) => void;
 }
 
@@ -16,6 +19,7 @@ export function NodeDetailPanel({
   upstream,
   downstream,
   onOpenFile,
+  onShowCompiledSql,
   onSelect,
 }: NodeDetailPanelProps): JSX.Element {
   return (
@@ -38,11 +42,29 @@ export function NodeDetailPanel({
       {node.description && <p className="ddag-detail__desc">{node.description}</p>}
       <NeighborList title="Upstream (depends on)" ids={upstream} onSelect={onSelect} />
       <NeighborList title="Downstream (dependents)" ids={downstream} onSelect={onSelect} />
-      {onOpenFile && (
-        <button type="button" className="ddag-btn" onClick={() => onOpenFile(node)}>
-          Go to file
-        </button>
-      )}
+      {(onOpenFile || onShowCompiledSql) && (
+  <div className="ddag-detail__actions">
+    {onOpenFile && (
+      <button
+        type="button"
+        className="ddag-btn"
+        onClick={() => onOpenFile(node)}
+      >
+        Go to file
+      </button>
+    )}
+
+    {onShowCompiledSql && (
+      <button
+        type="button"
+        className="ddag-btn"
+        onClick={() => onShowCompiledSql(node)}
+      >
+        Compiled SQL
+      </button>
+    )}
+  </div>
+)}
     </aside>
   );
 }

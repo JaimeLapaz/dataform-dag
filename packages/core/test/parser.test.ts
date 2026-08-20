@@ -84,3 +84,133 @@ describe("extractRefs", () => {
     ]);
   });
 });
+
+describe("config dependencies", () => {
+  it("reads explicit dependencies", () => {
+    const node = parseSqlx(
+      "definitions/process_data.sqlx",
+      `
+        config {
+          type: "operations",
+          dependencies: ["prepare_data"]
+        }
+
+        SELECT 1;
+      `,
+    );
+
+    expect(node.refs).toEqual([
+      "prepare_data",
+    ]);
+  });
+
+  it("uses filename as node id when name is not declared", () => {
+    const node = parseSqlx(
+      "definitions/prepare_data.sqlx",
+      `
+        config {
+          type: "operations"
+        }
+
+        SELECT 1;
+      `,
+    );
+
+    expect(node.id).toBe(
+      "prepare_data",
+    );
+  });
+
+  it("uses config.name as node id when name is declared", () => {
+    const node = parseSqlx(
+      "definitions/prepare_data.sqlx",
+      `
+        config {
+          type: "operations",
+          name: "load_raw_data"
+        }
+
+        SELECT 1;
+      `,
+    );
+
+    expect(node.id).toBe(
+      "load_raw_data",
+    );
+  });
+
+  it("keeps dependencies pointing to config.name", () => {
+    const upstream = parseSqlx(
+      "definitions/prepare_data.sqlx",
+      `
+        config {
+          type: "operations",
+          name: "load_raw_data"
+        }
+
+        SELECT 1;
+      `,
+    );
+
+    const downstream = parseSqlx(
+      "definitions/process_data.sqlx",
+      `
+        config {
+          type: "operations",
+          dependencies: ["load_raw_data"]
+        }
+
+        SELECT 2;
+      `,
+    );
+
+    expect(upstream.id).toBe(
+      "load_raw_data",
+    );
+
+    expect(downstream.refs).toEqual([
+      "load_raw_data",
+    ]);
+  });
+
+  it("combines ref dependencies and explicit dependencies", () => {
+    const node = parseSqlx(
+      "definitions/process_data.sqlx",
+      `
+        config {
+          type: "operations",
+          dependencies: ["prepare_data"]
+        }
+
+        SELECT *
+        FROM \${ref("customers")}
+      `,
+    );
+
+    expect(node.refs).toEqual([
+      "customers",
+      "prepare_data",
+    ]);
+  });
+
+  it("does not duplicate dependencies", () => {
+    const node = parseSqlx(
+      "definitions/process_data.sqlx",
+      `
+        config {
+          type: "operations",
+          dependencies: [
+            "prepare_data",
+            "prepare_data"
+          ]
+        }
+
+        SELECT 1;
+      `,
+    );
+
+    expect(node.refs).toEqual([
+      "prepare_data",
+    ]);
+  });
+});

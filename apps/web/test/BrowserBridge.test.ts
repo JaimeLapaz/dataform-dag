@@ -56,6 +56,7 @@ describe("BrowserBridge", () => {
   it("declares no host capabilities (browser can't open/watch/focus)", () => {
     expect(new BrowserBridge(source).capabilities).toEqual({
       openFile: false,
+      compiledSql: false,
       liveWatch: false,
       focusOnActive: false,
     });

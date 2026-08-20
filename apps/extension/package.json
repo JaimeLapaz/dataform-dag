@@ -39,6 +39,11 @@
         "command": "dataformDag.showGraph",
         "title": "Show Graph",
         "category": "Dataform DAG"
+      },
+      {
+        "command": "dataformDag.showCompiledSql",
+        "title": "Show Compiled SQL",
+        "category": "Dataform DAG"
       }
     ]
   },

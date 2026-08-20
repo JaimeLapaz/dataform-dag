@@ -192,6 +192,16 @@ body,
 .ddag-node:hover .ddag-node__handle {
   opacity: 1;
 }
+.ddag-detail__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.ddag-detail__actions .ddag-btn {
+  margin-top: 0;
+}
 .ddag-btn {
   background: #111827;
   color: #fff;

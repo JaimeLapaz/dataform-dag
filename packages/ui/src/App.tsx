@@ -57,9 +57,26 @@ export function App({ bridge }: AppProps): JSX.Element {
             upstream={upstreamOf(index, selected.id)}
             downstream={downstreamOf(index, selected.id)}
             onSelect={setSelectedId}
+
             onOpenFile={
               capabilities.openFile
-                ? (node) => bridge.send({ type: "openFile", nodeId: node.id, filePath: node.filePath })
+                ? (node) =>
+                    bridge.send({
+                      type: "openFile",
+                      nodeId: node.id,
+                      filePath: node.filePath,
+                    })
+                : undefined
+            }
+
+            onShowCompiledSql={
+              capabilities.compiledSql
+                ? (node) =>
+                    bridge.send({
+                      type: "showCompiledSql",
+                      nodeId: node.id,
+                      filePath: node.filePath,
+                    })
                 : undefined
             }
           />

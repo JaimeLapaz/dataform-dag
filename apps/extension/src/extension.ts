@@ -1,9 +1,16 @@
 import * as vscode from "vscode";
+import * as path from "node:path";
 import {
   NodeFileSource,
   buildGraphFromWorkspace,
   serializeGraph,
+
+  compileDataformProject,
+  findCompiledActionByFile,
+
   type SerializedGraph,
+  type CompileAction,
+  type CompileOutput,
 } from "@dataform-dag/core";
 // The wire protocol is defined once in the UI package; the host imports it as types only, so no
 // React reaches the Node bundle.
@@ -12,7 +19,16 @@ import type { InboundMsg, OutboundMsg } from "@dataform-dag/ui";
 export function activate(context: vscode.ExtensionContext): void {
   const controller = new GraphController(context);
   context.subscriptions.push(
-    vscode.commands.registerCommand("dataformDag.showGraph", () => controller.show()),
+    vscode.commands.registerCommand(
+      "dataformDag.showGraph",
+      () => controller.show(),
+    ),
+
+    vscode.commands.registerCommand(
+      "dataformDag.showCompiledSql",
+      () => controller.showCompiledSql(),
+    ),
+
     controller,
   );
 }
@@ -32,7 +48,126 @@ class GraphController implements vscode.Disposable {
   /** filePath → node id, refreshed on each build so an active-editor change can focus its node. */
   private idByPath = new Map<string, string>();
 
+  private compiledOutputCache:
+  | {
+      root: string;
+      output: CompileOutput;
+    }
+  | undefined;
+
+  /**
+   * Compilation currently running.
+   *
+   * We keep the root together with the Promise so we never
+   * accidentally reuse a compilation from another workspace.
+   */
+  private compileInProgress:
+    | {
+        root: string;
+        promise: Promise<CompileOutput>;
+      }
+    | undefined;
+
+  /**
+   * Incremented whenever a source/config file changes.
+   *
+   * This prevents an old compilation that finishes late from
+   * being written back into the cache after it was invalidated.
+   */
+  private compilationGeneration = 0;
+
   constructor(private readonly context: vscode.ExtensionContext) {}
+  async showCompiledSql(): Promise<void> {
+    const editor = vscode.window.activeTextEditor;
+
+    if (!editor) {
+      vscode.window.showWarningMessage(
+        "Dataform DAG: open a .sqlx file first.",
+      );
+      return;
+    }
+
+    await this.showCompiledSqlForFile(
+      editor.document.uri.fsPath,
+    );
+  }
+
+  private async showCompiledSqlForFile(
+    sourceFile: string,
+  ): Promise<void> {
+    if (!sourceFile.toLowerCase().endsWith(".sqlx")) {
+      vscode.window.showWarningMessage(
+        "Dataform DAG: the selected file is not a .sqlx file.",
+      );
+      return;
+    }
+
+    const sourceUri = vscode.Uri.file(sourceFile);
+
+    const workspaceFolder =
+      vscode.workspace.getWorkspaceFolder(sourceUri);
+
+    const root =
+      workspaceFolder?.uri.fsPath ??
+      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+    if (!root) {
+      vscode.window.showWarningMessage(
+        "Dataform DAG: open a Dataform project first.",
+      );
+      return;
+    }
+
+    const relativeFile = path
+      .relative(root, sourceFile)
+      .replaceAll("\\", "/");
+
+    try {
+      const output =
+        await this.getCompiledOutput(root);
+
+      const action =
+        findCompiledActionByFile(
+          output,
+          relativeFile,
+        );
+
+      if (!action) {
+        vscode.window.showWarningMessage(
+          `Dataform DAG: no compiled action found for ${relativeFile}.`,
+        );
+        return;
+      }
+
+      const sql =
+        buildCompiledSqlPreview(action);
+
+      if (!sql) {
+        vscode.window.showWarningMessage(
+          `Dataform DAG: no compiled SQL found for ${relativeFile}.`,
+        );
+        return;
+      }
+
+      const document =
+        await vscode.workspace.openTextDocument({
+          language: "sql",
+          content: sql,
+        });
+
+      await vscode.window.showTextDocument(
+        document,
+        {
+          viewColumn: vscode.ViewColumn.Beside,
+          preview: true,
+        },
+      );
+    } catch (error) {
+      vscode.window.showErrorMessage(
+        `Dataform DAG: could not generate SQL — ${formatError(error)}`,
+      );
+    }
+  }
 
   show(): void {
     if (this.panel) {
@@ -60,11 +195,71 @@ class GraphController implements vscode.Disposable {
 
     // liveWatch: any .sqlx change rebuilds and repushes the graph.
     const watcher = vscode.workspace.createFileSystemWatcher("**/*.sqlx");
-    const rebuild = (): void => void this.buildAndPost();
+    const rebuild = (): void => {
+      this.invalidateCompilationCache();
+
+      void this.buildAndPost();
+    };
     watcher.onDidChange(rebuild, undefined, this.panelDisposables);
     watcher.onDidCreate(rebuild, undefined, this.panelDisposables);
     watcher.onDidDelete(rebuild, undefined, this.panelDisposables);
     this.panelDisposables.push(watcher);
+    /*
+    * Compilation-only watchers:
+    *
+    * These files can change the generated SQL without
+    * necessarily changing the graph structure.
+    */
+    const compilationWatchers = [
+      "**/*.js",
+      "**/*.mjs",
+      "**/*.cjs",
+      "**/workflow_settings.yaml",
+      "**/workflow_settings.yml",
+      "**/dataform.json",
+    ];
+
+    for (const pattern of compilationWatchers) {
+      const compilationWatcher =
+        vscode.workspace.createFileSystemWatcher(
+          pattern,
+        );
+
+      const invalidate = (): void => {
+        this.invalidateCompilationCache();
+
+        const root =
+          vscode.workspace
+            .workspaceFolders?.[0]
+            ?.uri.fsPath;
+
+        if (root) {
+          this.warmCompilationCache(root);
+        }
+      };
+
+      compilationWatcher.onDidChange(
+        invalidate,
+        undefined,
+        this.panelDisposables,
+      );
+
+      compilationWatcher.onDidCreate(
+        invalidate,
+        undefined,
+        this.panelDisposables,
+      );
+
+      compilationWatcher.onDidDelete(
+        invalidate,
+        undefined,
+        this.panelDisposables,
+      );
+
+      this.panelDisposables.push(
+        compilationWatcher,
+      );
+    }
 
     // focusOnActive: reflect the active editor into the graph when it maps to a node.
     vscode.window.onDidChangeActiveTextEditor(
@@ -76,10 +271,118 @@ class GraphController implements vscode.Disposable {
     panel.onDidDispose(() => this.closePanel(), undefined, this.panelDisposables);
   }
 
+  private async getCompiledOutput(
+    root: string,
+  ): Promise<CompileOutput> {
+    /*
+    * Fast path: we already compiled this workspace.
+    */
+    if (
+      this.compiledOutputCache &&
+      this.compiledOutputCache.root === root
+    ) {
+      return this.compiledOutputCache.output;
+    }
+
+    /*
+    * If Dataform is already compiling this same workspace,
+    * reuse that Promise instead of starting another process.
+    */
+    if (
+      this.compileInProgress &&
+      this.compileInProgress.root === root
+    ) {
+      return this.compileInProgress.promise;
+    }
+
+    const generation =
+      this.compilationGeneration;
+
+    const promise =
+      compileDataformProject(root);
+
+    const currentCompilation = {
+      root,
+      promise,
+    };
+
+    this.compileInProgress =
+      currentCompilation;
+
+    try {
+      const output = await promise;
+
+      /*
+      * Only cache the result if no relevant file changed
+      * while Dataform was compiling.
+      */
+      if (
+        this.compilationGeneration === generation
+      ) {
+        this.compiledOutputCache = {
+          root,
+          output,
+        };
+      }
+
+      return output;
+    } finally {
+      /*
+      * Don't clear a newer compilation that might have
+      * started while this one was finishing.
+      */
+      if (
+        this.compileInProgress ===
+        currentCompilation
+      ) {
+        this.compileInProgress = undefined;
+      }
+    }
+  }
+
+  private invalidateCompilationCache(): void {
+    this.compilationGeneration += 1;
+
+    this.compiledOutputCache = undefined;
+
+    /*
+    * We can't cancel the existing Dataform process with the
+    * current compiler implementation, but we stop considering
+    * it reusable.
+    *
+    * Its generation check will prevent its result from being
+    * cached when it eventually finishes.
+    */
+    this.compileInProgress = undefined;
+  }
+
+  private warmCompilationCache(
+    root: string,
+  ): void {
+    /*
+    * Warm-up is deliberately best-effort.
+    *
+    * Opening the DAG must continue working even when:
+    * - Dataform isn't installed
+    * - the Dataform project currently doesn't compile
+    * - a local JS/include has an error
+    *
+    * The user will receive the real error only if they
+    * explicitly request Compiled SQL.
+    */
+    void this.getCompiledOutput(root).catch(() => {
+      // Intentionally ignored.
+    });
+  }
+
   private onMessage(msg: OutboundMsg): void {
     switch (msg.type) {
       case "ready":
+        void this.buildAndPost();
+        return;
+
       case "requestRefresh":
+        this.invalidateCompilationCache();
         void this.buildAndPost();
         return;
       case "openFile":
@@ -87,6 +390,12 @@ class GraphController implements vscode.Disposable {
           viewColumn: vscode.ViewColumn.One,
           preview: false,
         });
+        return;
+      case "showCompiledSql":
+        void this.showCompiledSqlForFile(
+          msg.filePath,
+        );
+
         return;
     }
   }
@@ -102,6 +411,12 @@ class GraphController implements vscode.Disposable {
       const serialized = serializeGraph(graph);
       this.idByPath = new Map(serialized.nodes.map((n) => [n.filePath, n.id]));
       this.post({ type: "graphUpdate", graph: serialized });
+      /*
+      * Start Dataform compilation in the background.
+      *
+      * Do NOT await this: rendering the DAG should remain fast.
+      */
+      this.warmCompilationCache(root);
     } catch (err) {
       vscode.window.showErrorMessage(`Dataform DAG: could not build the graph — ${String(err)}`);
     }
@@ -135,19 +450,19 @@ class GraphController implements vscode.Disposable {
       `script-src 'nonce-${nonce}'`,
     ].join("; ");
     return `<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="${csp}" />
-    <link href="${styleUri}" rel="stylesheet" />
-    <title>Dataform DAG</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script nonce="${nonce}" src="${scriptUri}"></script>
-  </body>
-</html>`;
+      <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <meta http-equiv="Content-Security-Policy" content="${csp}" />
+          <link href="${styleUri}" rel="stylesheet" />
+          <title>Dataform DAG</title>
+        </head>
+        <body>
+          <div id="root"></div>
+          <script nonce="${nonce}" src="${scriptUri}"></script>
+        </body>
+      </html>`;
   }
 
   private closePanel(): void {
@@ -158,6 +473,79 @@ class GraphController implements vscode.Disposable {
   dispose(): void {
     this.closePanel();
   }
+}
+
+function buildCompiledSqlPreview(
+  action: CompileAction,
+): string | undefined {
+  /*
+   * Operations pueden tener varias sentencias SQL.
+   */
+  if (action.queries?.length) {
+    return action.queries
+      .map(
+        (query, index) =>
+          `-- Operation ${index + 1}\n\n${query}`,
+      )
+      .join("\n\n\n");
+  }
+
+  /*
+   * Para una incremental Dataform genera dos posibilidades:
+   *
+   * 1. query             -> carga inicial/full
+   * 2. incrementalQuery  -> ejecución incremental
+   *
+   * Sin consultar BigQuery no sabemos si la tabla ya existe,
+   * así que mostramos las dos.
+   */
+  if (
+    action.incrementalQuery &&
+    action.incrementalQuery !== action.query
+  ) {
+    const fullQuery = [
+      "-- ========================================",
+      "-- FULL / INITIAL QUERY",
+      "-- ========================================",
+      "",
+      action.query ?? "",
+    ].join("\n");
+
+    const incrementalQuery = [
+      "-- ========================================",
+      "-- INCREMENTAL QUERY",
+      "-- ========================================",
+      "",
+      action.incrementalQuery,
+    ].join("\n");
+
+    return [
+      fullQuery,
+      "",
+      "",
+      incrementalQuery,
+    ].join("\n");
+  }
+
+  /*
+   * Tables, views y assertions.
+   *
+   * Esto es justo lo que buscamos:
+   * la SQL resultante de la compilación Dataform.
+   */
+  if (action.query) {
+    return action.query;
+  }
+
+  return undefined;
+}
+
+function formatError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
 }
 
 function makeNonce(): string {

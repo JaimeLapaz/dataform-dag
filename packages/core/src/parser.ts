@@ -8,18 +8,62 @@ import type { DataformNode, NodeType } from "./types.js";
  */
 export function parseSqlx(filePath: string, content: string): DataformNode {
   const raw = extractConfigBlock(content);
-  // Strip comments before reading fields: a `//` comment can carry an apostrophe (`GROUP BY'd`)
-  // that would otherwise read as a stray string, or even a decoy `type:` line.
-  const config = raw === null ? null : stripComments(raw);
-  const declaredType = config ? matchString(config, "type") : undefined;
-  const declaredName = config ? matchString(config, "name") : undefined;
+
+  const config =
+    raw === null
+      ? null
+      : stripComments(raw);
+
+  const declaredType =
+    config
+      ? matchString(config, "type")
+      : undefined;
+
+  const declaredName =
+    config
+      ? matchString(config, "name")
+      : undefined;
+
+  const refs = extractRefs(content);
+
+  const explicitDependencies =
+    config
+      ? parseDependencies(config)
+      : [];
+
+  const allDependencies = [...refs];
+
+  for (const dependency of explicitDependencies) {
+    if (!allDependencies.includes(dependency)) {
+      allDependencies.push(dependency);
+    }
+  }
+
   return {
+    /*
+     * Esta parte es importante:
+     *
+     * config { name: "foo" }
+     *       -> id = "foo"
+     *
+     * sin name, definitions/bar.sqlx
+     *       -> id = "bar"
+     */
     id: declaredName ?? basename(filePath),
+
     filePath,
+
     type: mapType(declaredType),
-    tags: config ? parseTags(config) : [],
-    refs: extractRefs(content),
-    description: config ? parseDescription(config) : undefined,
+
+    tags: config
+      ? parseTags(config)
+      : [],
+
+    refs: allDependencies,
+
+    description: config
+      ? parseDescription(config)
+      : undefined,
   };
 }
 
@@ -126,6 +170,52 @@ function parseTags(block: string): string[] {
     return [...raw.matchAll(/(["'])((?:\\.|(?!\1).)*)\1/gs)].map((g) => unescape(g[2] ?? ""));
   }
   return [unescape(raw.slice(1, -1))];
+}
+
+/**
+ * Parses explicit Dataform dependencies:
+ *
+ * dependencies: ["action_a", "action_b"]
+ *
+ * The strings are kept exactly as declared because they
+ * refer to the target action id:
+ *
+ * - config.name when present
+ * - otherwise the .sqlx filename without extension
+ */
+function parseDependencies(block: string): string[] {
+  const match =
+    /\bdependencies\s*:\s*\[([\s\S]*?)\]/.exec(block);
+
+  if (!match?.[1]) {
+    return [];
+  }
+
+  const body = match[1];
+
+  const dependencies: string[] = [];
+  const seen = new Set<string>();
+
+  for (
+    const item of body.matchAll(
+      /(["'])((?:\\.|(?!\1).)*)\1/gs,
+    )
+  ) {
+    const name = item[2];
+
+    if (!name) {
+      continue;
+    }
+
+    const value = unescape(name);
+
+    if (!seen.has(value)) {
+      seen.add(value);
+      dependencies.push(value);
+    }
+  }
+
+  return dependencies;
 }
 
 /**

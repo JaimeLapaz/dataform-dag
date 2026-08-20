@@ -17,6 +17,7 @@ const vscode = acquireVsCodeApi();
 export class VsCodeBridge implements HostBridge {
   readonly capabilities: HostCapabilities = {
     openFile: true,
+    compiledSql: true,
     liveWatch: true,
     focusOnActive: true,
   };
