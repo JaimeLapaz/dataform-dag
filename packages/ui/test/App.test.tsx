@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { SerializedGraph } from "@dataform-dag/core";
 import type { DagGraphProps } from "../src/DagGraph.js";
@@ -81,53 +81,60 @@ describe("App", () => {
     await userEvent.click(await screen.findByRole("button", { name: "select:mid" }));
     expect(screen.queryByRole("button", { name: "Go to file" })).not.toBeInTheDocument();
   });
-  it("shows compilation status for hosts that support compiled SQL", async () => {
-    const bridge = new MockBridge(
-      graph,
-      {
-        compiledSql: true,
-      },
-    );
-
-    render(
-      <App bridge={bridge} />,
-    );
-
-    await userEvent.click(
-      await screen.findByRole(
-        "button",
+  it(
+    "shows compilation status for hosts that support compiled SQL",
+    async () => {
+      const bridge = new MockBridge(
+        graph,
         {
-          name: "select:mid",
+          compiledSql: true,
         },
-      ),
-    );
+      );
 
-    bridge.emit({
-      type: "compilationStatus",
-      status: "compiling",
-    });
+      render(
+        <App bridge={bridge} />,
+      );
 
-    expect(
-      await screen.findByText(
-        "Compiling…",
-      ),
-    ).toBeInTheDocument();
+      await userEvent.click(
+        await screen.findByRole(
+          "button",
+          {
+            name: "select:mid",
+          },
+        ),
+      );
 
-    bridge.emit({
-      type: "compilationStatus",
-      status: "ready",
-    });
+      act(() => {
+        bridge.emit({
+          type: "compilationStatus",
+          status: "compiling",
+        });
+      });
 
-    expect(
-      await screen.findByText(
-        "✓ Compiled",
-      ),
-    ).toBeInTheDocument();
+      expect(
+        await screen.findByText(
+          "Compiling…",
+        ),
+      ).toBeInTheDocument();
 
-    expect(
-      screen.queryByText(
-        "Compiling…",
-      ),
-    ).not.toBeInTheDocument();
-  });
+      act(() => {
+        bridge.emit({
+          type: "compilationStatus",
+          status: "ready",
+        });
+      });
+
+      expect(
+        await screen.findByText(
+          "✓ Compiled",
+        ),
+      ).toBeInTheDocument();
+
+      expect(
+        screen.queryByText(
+          "Compiling…",
+        ),
+      ).not.toBeInTheDocument();
+    },
+  );
 });

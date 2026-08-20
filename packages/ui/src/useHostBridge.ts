@@ -14,6 +14,16 @@ export interface HostBridgeState {
   } | null;
 
   compilationStatus: CompilationStatus;
+
+  compiledSql: {
+    nodeId: string;
+    sql: string;
+  } | null;
+
+  compiledSqlError: {
+    nodeId: string;
+    message: string;
+  } | null;
 }
 
 /**
@@ -25,6 +35,8 @@ export function useHostBridge(bridge: HostBridge): HostBridgeState {
   const [graph, setGraph] = useState<SerializedGraph | null>(null);
   const [focusRequest, setFocusRequest] = useState<HostBridgeState["focusRequest"]>(null);
   const [compilationStatus, setCompilationStatus] = useState<CompilationStatus>("idle");
+  const [compiledSql, setCompiledSql] = useState<HostBridgeState["compiledSql"]>(null);
+  const [compiledSqlError, setCompiledSqlError] = useState<HostBridgeState["compiledSqlError"]>(null);
 
   useEffect(() => {
     let nonce = 0;
@@ -41,6 +53,25 @@ export function useHostBridge(bridge: HostBridge): HostBridgeState {
           msg.type === "compilationStatus"
         ) {
           setCompilationStatus(msg.status);
+
+          if (
+            msg.status === "idle" ||
+            msg.status === "compiling"
+          ) {
+            setCompiledSql(null);
+            setCompiledSqlError(null);
+          }
+        } else if (msg.type === "compiledSqlResult") {
+          setCompiledSql({
+            nodeId: msg.nodeId,
+            sql: msg.sql,
+          });
+          setCompiledSqlError(null);
+        } else if (msg.type === "compiledSqlError") {
+          setCompiledSqlError({
+            nodeId: msg.nodeId,
+            message: msg.message,
+          });
         }
       });
     bridge.send({ type: "ready" });
@@ -50,5 +81,7 @@ export function useHostBridge(bridge: HostBridge): HostBridgeState {
     graph,
     focusRequest,
     compilationStatus,
+    compiledSql,
+    compiledSqlError,
   };
 }

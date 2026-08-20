@@ -22,6 +22,16 @@ export type InboundMsg =
   | {
       type: "compilationStatus";
       status: CompilationStatus;
+    }
+  | {
+      type: "compiledSqlResult";
+      nodeId: string;
+      sql: string;
+    }
+  | {
+      type: "compiledSqlError";
+      nodeId: string;
+      message: string;
     };
 
 /**

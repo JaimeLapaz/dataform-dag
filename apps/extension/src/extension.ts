@@ -49,11 +49,11 @@ class GraphController implements vscode.Disposable {
   private idByPath = new Map<string, string>();
 
   private compiledOutputCache:
-  | {
+    | {
       root: string;
       output: CompileOutput;
     }
-  | undefined;
+    | undefined;
 
   /**
    * Compilation currently running.
@@ -63,9 +63,9 @@ class GraphController implements vscode.Disposable {
    */
   private compileInProgress:
     | {
-        root: string;
-        promise: Promise<CompileOutput>;
-      }
+      root: string;
+      promise: Promise<CompileOutput>;
+    }
     | undefined;
 
   /**
@@ -76,7 +76,7 @@ class GraphController implements vscode.Disposable {
    */
   private compilationGeneration = 0;
 
-  constructor(private readonly context: vscode.ExtensionContext) {}
+  constructor(private readonly context: vscode.ExtensionContext) { }
   async showCompiledSql(): Promise<void> {
     const editor = vscode.window.activeTextEditor;
 
@@ -398,6 +398,103 @@ class GraphController implements vscode.Disposable {
     });
   }
 
+  private async postCompiledSqlForFile(
+    nodeId: string,
+    sourceFile: string,
+  ): Promise<void> {
+    if (
+      !sourceFile
+        .toLowerCase()
+        .endsWith(".sqlx")
+    ) {
+      this.post({
+        type: "compiledSqlError",
+        nodeId,
+        message:
+          "The selected file is not a .sqlx file.",
+      });
+
+      return;
+    }
+
+    const sourceUri =
+      vscode.Uri.file(sourceFile);
+
+    const workspaceFolder =
+      vscode.workspace.getWorkspaceFolder(
+        sourceUri,
+      );
+
+    const root =
+      workspaceFolder?.uri.fsPath ??
+      vscode.workspace
+        .workspaceFolders?.[0]
+        ?.uri.fsPath;
+
+    if (!root) {
+      this.post({
+        type: "compiledSqlError",
+        nodeId,
+        message:
+          "Open a Dataform project first.",
+      });
+
+      return;
+    }
+
+    const relativeFile = path
+      .relative(root, sourceFile)
+      .replaceAll("\\", "/");
+
+    try {
+      const output =
+        await this.getCompiledOutput(root);
+
+      const action =
+        findCompiledActionByFile(
+          output,
+          relativeFile,
+        );
+
+      if (!action) {
+        this.post({
+          type: "compiledSqlError",
+          nodeId,
+          message:
+            `No compiled action found for ${relativeFile}.`,
+        });
+
+        return;
+      }
+
+      const sql =
+        buildCompiledSqlPreview(action);
+
+      if (!sql) {
+        this.post({
+          type: "compiledSqlError",
+          nodeId,
+          message:
+            `No compiled SQL found for ${relativeFile}.`,
+        });
+
+        return;
+      }
+
+      this.post({
+        type: "compiledSqlResult",
+        nodeId,
+        sql,
+      });
+    } catch (error) {
+      this.post({
+        type: "compiledSqlError",
+        nodeId,
+        message: formatError(error),
+      });
+    }
+  }
+
   private onMessage(msg: OutboundMsg): void {
     switch (msg.type) {
       case "ready":
@@ -415,7 +512,8 @@ class GraphController implements vscode.Disposable {
         });
         return;
       case "showCompiledSql":
-        void this.showCompiledSqlForFile(
+        void this.postCompiledSqlForFile(
+          msg.nodeId,
           msg.filePath,
         );
 

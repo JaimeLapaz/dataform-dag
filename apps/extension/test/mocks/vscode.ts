@@ -178,15 +178,39 @@ export const commands = {
 
 export const workspace: {
   workspaceFolders: WorkspaceFolder[] | undefined;
-  createFileSystemWatcher: (glob: string) => MockWatcher;
+
+  getWorkspaceFolder: (
+    uri: { fsPath: string },
+  ) => WorkspaceFolder | undefined;
+
+  createFileSystemWatcher: (
+    glob: string,
+  ) => MockWatcher;
 } = {
   workspaceFolders: undefined,
-  createFileSystemWatcher: vi.fn((glob: string) => {
-    const w = new MockWatcher();
-    w.glob = glob;
-    records.watchers.push(w);
-    return w;
-  }),
+
+  getWorkspaceFolder: vi.fn(
+    (uri: { fsPath: string }) => {
+      return workspace.workspaceFolders?.find(
+        (folder) =>
+          uri.fsPath.startsWith(
+            folder.uri.fsPath,
+          ),
+      );
+    },
+  ),
+
+  createFileSystemWatcher: vi.fn(
+    (glob: string) => {
+      const w = new MockWatcher();
+
+      w.glob = glob;
+
+      records.watchers.push(w);
+
+      return w;
+    },
+  ),
 };
 
 export const Uri = {

@@ -14,7 +14,7 @@ export interface AppProps {
 
 /** Host-agnostic root. Knows nothing about which host embeds it — only {@link HostBridge}. */
 export function App({ bridge }: AppProps): JSX.Element {
-  const { graph, focusRequest, compilationStatus } = useHostBridge(bridge);
+  const { graph, focusRequest, compilationStatus, compiledSql, compiledSqlError } = useHostBridge(bridge);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const { capabilities } = bridge;
   const flow = useLayout(graph);
@@ -54,13 +54,31 @@ export function App({ bridge }: AppProps): JSX.Element {
         {selected && index && (
           <NodeDetailPanel
             node={selected}
-            upstream={upstreamOf(index, selected.id)}
-            downstream={downstreamOf(index, selected.id)}
+            upstream={upstreamOf(
+              index,
+              selected.id,
+            )}
+            downstream={downstreamOf(
+              index,
+              selected.id,
+            )}
             onSelect={setSelectedId}
 
             compilationStatus={
               capabilities.compiledSql
                 ? compilationStatus
+                : undefined
+            }
+
+            compiledSql={
+              compiledSql?.nodeId === selected.id
+                ? compiledSql.sql
+                : undefined
+            }
+
+            compiledSqlError={
+              compiledSqlError?.nodeId === selected.id
+                ? compiledSqlError.message
                 : undefined
             }
 
@@ -85,7 +103,6 @@ export function App({ bridge }: AppProps): JSX.Element {
                     })
                 : undefined
             }
-            
           />
         )}
       </div>

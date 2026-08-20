@@ -29,12 +29,16 @@ import {
   buildGraphFromWorkspace,
   serializeGraph,
   compileDataformProject,
+  findCompiledActionByFile,
 } from "@dataform-dag/core";
 
 const buildMock = buildGraphFromWorkspace as unknown as Mock;
 const serializeMock = serializeGraph as unknown as Mock;
 const compileMock =
   compileDataformProject as unknown as Mock;
+
+const findCompiledActionMock =
+  findCompiledActionByFile as unknown as Mock;
 
 /** A serialized graph with two nodes, so focus mapping (filePath → id) has something to resolve. */
 const SERIALIZED = {
@@ -94,6 +98,8 @@ beforeEach(() => {
     assertions: [],
     declarations: [],
   });
+
+  findCompiledActionMock.mockReset();
 
   workspace.workspaceFolders = [
     {
@@ -179,6 +185,41 @@ describe("message routing", () => {
     expect(uri.fsPath).toBe("/proj/a.sqlx");
     expect(opts).toEqual({ viewColumn: ViewColumn.One, preview: false });
   });
+
+  it(
+    "posts compiled SQL back to the webview",
+    async () => {
+      findCompiledActionMock.mockReturnValue({
+        target: {
+          name: "customers",
+        },
+        fileName:
+          "definitions/customers.sqlx",
+        query:
+          "SELECT * FROM `project.demo.customers`",
+      });
+
+      activateAndShow();
+
+      lastPanel().webview.emitMessage({
+        type: "showCompiledSql",
+        nodeId: "customers",
+        filePath:
+          "/proj/definitions/customers.sqlx",
+      });
+
+      await vi.waitFor(() =>
+        expect(
+          lastPanel().webview.postMessage,
+        ).toHaveBeenCalledWith({
+          type: "compiledSqlResult",
+          nodeId: "customers",
+          sql:
+            "SELECT * FROM `project.demo.customers`",
+        }),
+      );
+    },
+  );
 });
 
 describe("buildAndPost", () => {
