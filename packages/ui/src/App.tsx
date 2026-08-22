@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { DataformNode } from "@dataform-dag/core";
 import type { HostBridge } from "./HostBridge.js";
 import { useHostBridge } from "./useHostBridge.js";
@@ -14,6 +14,7 @@ import { useLayout } from "./useLayout.js";
 import { DagGraph } from "./DagGraph.js";
 import { NodeDetailPanel } from "./NodeDetailPanel.js";
 import "./app.css";
+import { TagFilter } from "./TagFilter.js";
 
 export interface AppProps {
   bridge: HostBridge;
@@ -21,23 +22,47 @@ export interface AppProps {
 
 /** Host-agnostic root. Knows nothing about which host embeds it — only {@link HostBridge}. */
 export function App({ bridge }: AppProps): JSX.Element {
-  const { graph, focusRequest, compilationStatus, compiledSql, compiledSqlError } = useHostBridge(bridge);
+  const {
+    graph,
+    focusRequest,
+    compilationStatus,
+    compiledSql,
+    compiledSqlError,
+    savedTagFilter,
+  } = useHostBridge(bridge);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const toggleTag = (tag: string): void => {
-    setSelectedTags((current) =>
-      current.includes(tag)
-        ? current.filter(
+  const tagFilterRestored = useRef(false);
+
+  const persistTagFilter = (
+    nextTags: string[],
+  ): void => {
+    setSelectedTags(nextTags);
+    setSelectedId(null);
+
+    bridge.send({
+      type: "setTagFilter",
+      selectedTags: nextTags,
+    });
+  };
+
+  const toggleTag = (
+    tag: string,
+  ): void => {
+    const nextTags =
+      selectedTags.includes(tag)
+        ? selectedTags.filter(
           (item) => item !== tag,
         )
-        : [...current, tag],
-    );
-    setSelectedId(null);
+        : [...selectedTags, tag];
+
+    persistTagFilter(nextTags);
   };
+
   const clearTags = (): void => {
-    setSelectedTags([]);
-    setSelectedId(null);
+    persistTagFilter([]);
   };
+
   const { capabilities } = bridge;
 
   const availableTags = useMemo(
@@ -59,6 +84,54 @@ export function App({ bridge }: AppProps): JSX.Element {
     [graph, selectedTags],
   );
 
+  useEffect(() => {
+    if (
+      tagFilterRestored.current ||
+      savedTagFilter === null
+    ) {
+      return;
+    }
+
+    tagFilterRestored.current = true;
+
+    setSelectedTags(
+      savedTagFilter,
+    );
+  }, [savedTagFilter]);
+
+  useEffect(() => {
+    if (
+      !graph ||
+      !tagFilterRestored.current
+    ) {
+      return;
+    }
+
+    const validTags =
+      selectedTags.filter((tag) =>
+        availableTags.includes(tag),
+      );
+
+    if (
+      validTags.length ===
+      selectedTags.length
+    ) {
+      return;
+    }
+
+    setSelectedTags(validTags);
+
+    bridge.send({
+      type: "setTagFilter",
+      selectedTags: validTags,
+    });
+  }, [
+    graph,
+    availableTags,
+    selectedTags,
+    bridge,
+  ]);
+
   const flow =
     useLayout(filteredGraph);
 
@@ -72,64 +145,25 @@ export function App({ bridge }: AppProps): JSX.Element {
 
   const selected: DataformNode | null =
     (index && selectedId && index.byId.get(selectedId)) || null;
+
   return (
     <div className="ddag-app">
       <header className="ddag-topbar">
         <h1 className="ddag-topbar__title">dataform-dag</h1>
         <Legend />
-        {graph && availableTags.length > 0 && (
-          <div className="ddag-tag-filter">
-            <span className="ddag-tag-filter__label">
-              Tags
-            </span>
 
-            <div className="ddag-tag-filter__chips">
-              {availableTags.map((tag) => {
-                const selected =
-                  selectedTags.includes(tag);
+        {graph &&
+          availableTags.length > 0 && (
+            <TagFilter
+              tags={availableTags}
+              selectedTags={selectedTags}
+              onToggle={toggleTag}
+              onClear={clearTags}
+            />
+          )}
 
-                return (
-                  <button
-                    key={tag}
-                    type="button"
-                    className={[
-                      "ddag-tag-chip",
-                      selected
-                        ? "ddag-tag-chip--selected"
-                        : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
-                    aria-pressed={selected}
-                    onClick={() => toggleTag(tag)}
-                  >
-                    {selected && (
-                      <span
-                        className="ddag-tag-chip__check"
-                        aria-hidden="true"
-                      >
-                        ✓
-                      </span>
-                    )}
-
-                    {tag}
-                  </button>
-                );
-              })}
-            </div>
-
-            {selectedTags.length > 0 && (
-              <button
-                type="button"
-                className="ddag-tag-filter__clear"
-                onClick={clearTags}
-              >
-                Clear
-              </button>
-            )}
-          </div>
-        )}
         <div className="ddag-topbar__spacer" />
+
         {graph && filteredGraph && (
           <span className="ddag-topbar__count">
             {selectedTags.length > 0

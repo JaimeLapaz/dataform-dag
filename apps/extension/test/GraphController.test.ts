@@ -49,8 +49,57 @@ const SERIALIZED = {
   edges: [],
 };
 
-function fakeContext() {
-  return { subscriptions: [] as Array<{ dispose: () => void }>, extensionUri: Uri.file("/ext") };
+function fakeContext(
+  initialState: Record<
+    string,
+    unknown
+  > = {},
+) {
+  const state = new Map<
+    string,
+    unknown
+  >(
+    Object.entries(initialState),
+  );
+
+  return {
+    subscriptions: [] as Array<{
+      dispose: () => void;
+    }>,
+
+    extensionUri:
+      Uri.file("/ext"),
+
+    workspaceState: {
+      get: vi.fn(
+        (
+          key: string,
+          defaultValue?: unknown,
+        ) =>
+          state.has(key)
+            ? state.get(key)
+            : defaultValue,
+      ),
+
+      update: vi.fn(
+        async (
+          key: string,
+          value: unknown,
+        ): Promise<void> => {
+          if (value === undefined) {
+            state.delete(key);
+            return;
+          }
+
+          state.set(key, value);
+        },
+      ),
+
+      keys: vi.fn(
+        () => [...state.keys()],
+      ),
+    },
+  };
 }
 
 /** Register the command via activate() and invoke it to open the panel. */
@@ -220,6 +269,74 @@ describe("message routing", () => {
       );
     },
   );
+  it(
+    "restores the saved tag filter on ready",
+    async () => {
+      const context = fakeContext({
+        "dataformDag.selectedTags": [
+          "silver",
+          "gold",
+        ],
+      });
+
+      activate(context as never);
+
+      const showGraph =
+        records.commands.get(
+          "dataformDag.showGraph",
+        )!;
+
+      showGraph();
+
+      lastPanel().webview.emitMessage({
+        type: "ready",
+      });
+
+      await vi.waitFor(() =>
+        expect(
+          lastPanel().webview.postMessage,
+        ).toHaveBeenCalledWith({
+          type: "tagFilterState",
+          selectedTags: [
+            "silver",
+            "gold",
+          ],
+        }),
+      );
+    },
+  );
+  it(
+    "persists tag filter changes",
+    async () => {
+      const context = fakeContext();
+
+      activate(context as never);
+
+      const showGraph =
+        records.commands.get(
+          "dataformDag.showGraph",
+        )!;
+
+      showGraph();
+
+      lastPanel().webview.emitMessage({
+        type: "setTagFilter",
+        selectedTags: [
+          "silver",
+          "gold",
+        ],
+      });
+
+      await vi.waitFor(() =>
+        expect(
+          context.workspaceState.update,
+        ).toHaveBeenCalledWith(
+          "dataformDag.selectedTags",
+          ["silver", "gold"],
+        ),
+      );
+    },
+  );
 });
 
 describe("buildAndPost", () => {
@@ -230,7 +347,13 @@ describe("buildAndPost", () => {
     await vi.waitFor(() => expect(records.warnings).toHaveLength(1));
     expect(records.warnings[0]).toMatch(/open a folder/i);
     expect(buildMock).not.toHaveBeenCalled();
-    expect(lastPanel().webview.postMessage).not.toHaveBeenCalled();
+    expect(
+      lastPanel().webview.postMessage,
+    ).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "graphUpdate",
+      }),
+    );
   });
 
   it("surfaces a build failure as an error message without crashing", async () => {
@@ -239,7 +362,13 @@ describe("buildAndPost", () => {
     lastPanel().webview.emitMessage({ type: "ready" });
     await vi.waitFor(() => expect(records.errors).toHaveLength(1));
     expect(records.errors[0]).toMatch(/boom/);
-    expect(lastPanel().webview.postMessage).not.toHaveBeenCalled();
+    expect(
+      lastPanel().webview.postMessage,
+    ).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "graphUpdate",
+      }),
+    );
   });
 
   it("builds from the first workspace folder's path", async () => {

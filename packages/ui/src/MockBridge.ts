@@ -14,6 +14,7 @@ export class MockBridge implements HostBridge {
   readonly sent: OutboundMsg[] = [];
   capabilities: HostCapabilities;
   private listeners = new Set<(msg: InboundMsg) => void>();
+  private selectedTags: string[] = [];
   constructor(
     private readonly graph: SerializedGraph,
     capabilities: Partial<HostCapabilities> = {},
@@ -28,7 +29,29 @@ export class MockBridge implements HostBridge {
   }
   send(msg: OutboundMsg): void {
     this.sent.push(msg);
-    if (msg.type === "ready") this.emit({ type: "graphUpdate", graph: this.graph });
+
+    if (msg.type === "ready") {
+      this.emit({
+        type: "tagFilterState",
+        selectedTags:
+          this.selectedTags,
+      });
+
+      this.emit({
+        type: "graphUpdate",
+        graph: this.graph,
+      });
+
+      return;
+    }
+
+    if (
+      msg.type === "setTagFilter"
+    ) {
+      this.selectedTags = [
+        ...msg.selectedTags,
+      ];
+    }
   }
   onMessage(cb: (msg: InboundMsg) => void): () => void {
     this.listeners.add(cb);

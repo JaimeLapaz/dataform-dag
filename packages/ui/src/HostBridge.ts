@@ -7,7 +7,11 @@ export type OutboundMsg =
   | { type: "ready" }
   | { type: "openFile"; nodeId: string; filePath: string }
   | { type: "showCompiledSql"; nodeId: string; filePath: string }
-  | { type: "requestRefresh" };
+  | { type: "requestRefresh" }
+  | {
+    type: "setTagFilter";
+    selectedTags: string[];
+  };
 
 export type CompilationStatus =
   | "idle"
@@ -15,24 +19,28 @@ export type CompilationStatus =
   | "ready"
   | "error";
 
-  /** host → UI. */
+/** host → UI. */
 export type InboundMsg =
   | { type: "graphUpdate"; graph: SerializedGraph }
   | { type: "focusNode"; nodeId: string }
   | {
-      type: "compilationStatus";
-      status: CompilationStatus;
-    }
+    type: "compilationStatus";
+    status: CompilationStatus;
+  }
   | {
-      type: "compiledSqlResult";
-      nodeId: string;
-      sql: string;
-    }
+    type: "compiledSqlResult";
+    nodeId: string;
+    sql: string;
+  }
   | {
-      type: "compiledSqlError";
-      nodeId: string;
-      message: string;
-    };
+    type: "compiledSqlError";
+    nodeId: string;
+    message: string;
+  }
+  | {
+    type: "tagFilterState";
+    selectedTags: string[];
+  };
 
 /**
  * What a host can do. The UI reads these to decide what to render — a "Go to file" button only

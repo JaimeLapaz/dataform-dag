@@ -45,6 +45,7 @@ export function deactivate(): void {
 class GraphController implements vscode.Disposable {
   private panel: vscode.WebviewPanel | undefined;
   private readonly panelDisposables: vscode.Disposable[] = [];
+  private selectedTags: string[] = [];
   /** filePath → node id, refreshed on each build so an active-editor change can focus its node. */
   private idByPath = new Map<string, string>();
 
@@ -76,7 +77,46 @@ class GraphController implements vscode.Disposable {
    */
   private compilationGeneration = 0;
 
-  constructor(private readonly context: vscode.ExtensionContext) { }
+  private readSavedTagFilter():
+    string[] {
+    const saved =
+      this.context.workspaceState.get<
+        unknown
+      >(
+        "dataformDag.selectedTags",
+      );
+
+    if (!Array.isArray(saved)) {
+      return [];
+    }
+
+    return saved.filter(
+      (value): value is string =>
+        typeof value === "string",
+    );
+  }
+
+  private saveTagFilter(
+    selectedTags: string[],
+  ): void {
+    this.selectedTags = [
+      ...selectedTags,
+    ];
+
+    void this.context.workspaceState.update(
+      "dataformDag.selectedTags",
+      this.selectedTags,
+    );
+  }
+
+  constructor(
+    private readonly context:
+      vscode.ExtensionContext,
+  ) {
+    this.selectedTags =
+      this.readSavedTagFilter();
+  }
+
   async showCompiledSql(): Promise<void> {
     const editor = vscode.window.activeTextEditor;
 
@@ -498,19 +538,33 @@ class GraphController implements vscode.Disposable {
   private onMessage(msg: OutboundMsg): void {
     switch (msg.type) {
       case "ready":
+        this.post({
+          type: "tagFilterState",
+          selectedTags:
+            this.selectedTags,
+        });
+
         void this.buildAndPost();
+        return;
+
+      case "setTagFilter":
+        this.saveTagFilter(
+          msg.selectedTags,
+        );
         return;
 
       case "requestRefresh":
         this.invalidateCompilationCache();
         void this.buildAndPost();
         return;
+      
       case "openFile":
         void vscode.window.showTextDocument(vscode.Uri.file(msg.filePath), {
           viewColumn: vscode.ViewColumn.One,
           preview: false,
         });
         return;
+      
       case "showCompiledSql":
         void this.postCompiledSqlForFile(
           msg.nodeId,

@@ -68,76 +68,209 @@ body,
       #6b7280);
 }
 
-.ddag-tag-filter__chips {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  flex-wrap: wrap;
+.ddag-tag-filter {
+  position: relative;
+  flex-shrink: 0;
 }
 
-.ddag-tag-chip {
-  display: inline-flex;
+.ddag-tag-filter__summary {
+  box-sizing: border-box;
+
+  display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
 
-  min-height: 26px;
-  padding: 3px 8px;
+  min-width: 120px;
+  height: 30px;
 
-  border: 1px solid var(--vscode-button-secondaryBackground,
+  padding: 4px 10px;
+
+  border: 1px solid var(--vscode-dropdown-border,
       #d1d5db);
 
-  border-radius: 12px;
+  border-radius: 5px;
 
-  background: transparent;
+  background:
+    var(--vscode-dropdown-background,
+      #ffffff);
 
-  color: var(--vscode-foreground,
+  color:
+    var(--vscode-dropdown-foreground,
+      #111827);
+
+  font-size: 12px;
+  cursor: pointer;
+
+  list-style: none;
+}
+
+.ddag-tag-filter__summary::-webkit-details-marker {
+  display: none;
+}
+
+.ddag-tag-filter__summary::after {
+  content: "▾";
+  margin-left: auto;
+
+  font-size: 10px;
+  opacity: 0.7;
+
+  transition: transform 100ms ease;
+}
+
+.ddag-tag-filter[open] .ddag-tag-filter__summary::after {
+  transform: rotate(180deg);
+}
+
+.ddag-tag-filter__summary-label {
+  font-weight: 600;
+}
+
+.ddag-tag-filter__summary-value {
+  max-width: 180px;
+
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  color:
+    var(--vscode-descriptionForeground,
+      #6b7280);
+}
+
+.ddag-tag-filter__menu {
+  position: absolute;
+
+  top: calc(100% + 6px);
+  left: 0;
+
+  z-index: 100;
+
+  box-sizing: border-box;
+  width: 280px;
+
+  padding: 8px;
+
+  border: 1px solid var(--vscode-dropdown-border,
+      #d1d5db);
+
+  border-radius: 6px;
+
+  background:
+    var(--vscode-dropdown-background,
+      #ffffff);
+
+  color:
+    var(--vscode-dropdown-foreground,
+      #111827);
+
+  box-shadow:
+    0 6px 20px rgba(0, 0, 0, 0.18);
+}
+
+.ddag-tag-filter__search {
+  box-sizing: border-box;
+  width: 100%;
+  height: 30px;
+
+  padding: 4px 8px;
+
+  border: 1px solid var(--vscode-input-border,
+      #d1d5db);
+
+  border-radius: 4px;
+
+  outline: none;
+
+  background:
+    var(--vscode-input-background,
+      #ffffff);
+
+  color:
+    var(--vscode-input-foreground,
       #111827);
 
   font: inherit;
-  font-size: 11px;
+  font-size: 12px;
+}
 
+.ddag-tag-filter__search:focus {
+  border-color:
+    var(--vscode-focusBorder,
+      #007acc);
+}
+
+.ddag-tag-filter__options {
+  max-height: 280px;
+  overflow-y: auto;
+
+  margin-top: 6px;
+}
+
+.ddag-tag-filter__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  min-height: 28px;
+  padding: 2px 6px;
+
+  border-radius: 4px;
+
+  font-size: 12px;
   cursor: pointer;
 }
 
-.ddag-tag-chip:hover {
-  background: var(--vscode-list-hoverBackground,
+.ddag-tag-filter__option:hover {
+  background:
+    var(--vscode-list-hoverBackground,
       rgba(127, 127, 127, 0.12));
 }
 
-.ddag-tag-chip--selected {
-  border-color: var(--vscode-focusBorder,
-      #007acc);
-
-  background: var(--vscode-button-background,
-      #007acc);
-
-  color: var(--vscode-button-foreground,
-      #ffffff);
+.ddag-tag-filter__option input {
+  margin: 0;
 }
 
-.ddag-tag-chip--selected:hover {
-  background: var(--vscode-button-hoverBackground,
-      #0062a3);
+.ddag-tag-filter__empty {
+  padding: 12px 6px;
+
+  color:
+    var(--vscode-descriptionForeground,
+      #6b7280);
+
+  font-size: 12px;
+  text-align: center;
 }
 
-.ddag-tag-chip__check {
-  font-size: 10px;
+.ddag-tag-filter__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  margin-top: 6px;
+  padding: 7px 4px 0;
+
+  border-top: 1px solid var(--vscode-panel-border,
+      #e5e7eb);
+
+  color:
+    var(--vscode-descriptionForeground,
+      #6b7280);
+
+  font-size: 11px;
 }
 
 .ddag-tag-filter__clear {
-  flex-shrink: 0;
-
-  padding: 3px 6px;
+  padding: 2px 4px;
 
   border: 0;
   background: transparent;
 
-  color: var(--vscode-textLink-foreground,
+  color:
+    var(--vscode-textLink-foreground,
       #006ab1);
 
   font: inherit;
-  font-size: 11px;
-
   cursor: pointer;
 }
 

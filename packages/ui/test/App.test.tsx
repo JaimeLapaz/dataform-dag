@@ -137,4 +137,74 @@ describe("App", () => {
       ).not.toBeInTheDocument();
     },
   );
+  it(
+    "persists selected tag filters",
+    async () => {
+      const taggedGraph: SerializedGraph = {
+        nodes: [
+          {
+            id: "silver",
+            filePath:
+              "def/silver.sqlx",
+            type: "table",
+            tags: ["silver"],
+            refs: [],
+          },
+          {
+            id: "gold",
+            filePath:
+              "def/gold.sqlx",
+            type: "table",
+            tags: ["gold"],
+            refs: [],
+          },
+          {
+            id: "raw",
+            filePath:
+              "def/raw.sqlx",
+            type: "table",
+            tags: ["raw"],
+            refs: [],
+          },
+        ],
+        downstream: [],
+      };
+
+      const bridge =
+        new MockBridge(
+          taggedGraph,
+        );
+
+      render(
+        <App bridge={bridge} />,
+      );
+
+      const silver =
+        await screen.findByRole(
+          "checkbox",
+          {
+            name: "silver",
+          },
+        );
+
+      await userEvent.click(
+        silver,
+      );
+
+      expect(
+        bridge.sent,
+      ).toContainEqual({
+        type: "setTagFilter",
+        selectedTags: [
+          "silver",
+        ],
+      });
+
+      expect(
+        await screen.findByText(
+          "1 / 3 nodes",
+        ),
+      ).toBeInTheDocument();
+    },
+  );
 });

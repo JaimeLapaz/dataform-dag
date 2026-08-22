@@ -20,11 +20,36 @@ export class BrowserBridge implements HostBridge {
     focusOnActive: false,
   };
   private readonly listeners = new Set<(msg: InboundMsg) => void>();
+  private selectedTags: string[] = [];
 
-  constructor(private readonly source: FileSource) {}
+  constructor(private readonly source: FileSource) { }
 
   send(msg: OutboundMsg): void {
-    if (msg.type === "ready" || msg.type === "requestRefresh") void this.rebuild();
+    if (msg.type === "ready") {
+      this.emit({
+        type: "tagFilterState",
+        selectedTags:
+          this.selectedTags,
+      });
+
+      void this.rebuild();
+      return;
+    }
+
+    if (
+      msg.type === "requestRefresh"
+    ) {
+      void this.rebuild();
+      return;
+    }
+
+    if (
+      msg.type === "setTagFilter"
+    ) {
+      this.selectedTags = [
+        ...msg.selectedTags,
+      ];
+    }
   }
 
   onMessage(cb: (msg: InboundMsg) => void): () => void {

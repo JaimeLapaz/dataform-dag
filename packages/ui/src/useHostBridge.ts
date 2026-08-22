@@ -24,6 +24,8 @@ export interface HostBridgeState {
     nodeId: string;
     message: string;
   } | null;
+
+  savedTagFilter: string[] | null;
 }
 
 /**
@@ -37,6 +39,10 @@ export function useHostBridge(bridge: HostBridge): HostBridgeState {
   const [compilationStatus, setCompilationStatus] = useState<CompilationStatus>("idle");
   const [compiledSql, setCompiledSql] = useState<HostBridgeState["compiledSql"]>(null);
   const [compiledSqlError, setCompiledSqlError] = useState<HostBridgeState["compiledSqlError"]>(null);
+  const [
+    savedTagFilter,
+    setSavedTagFilter,
+  ] = useState<string[] | null>(null);
 
   useEffect(() => {
     let nonce = 0;
@@ -72,6 +78,10 @@ export function useHostBridge(bridge: HostBridge): HostBridgeState {
             nodeId: msg.nodeId,
             message: msg.message,
           });
+        } else if (msg.type === "tagFilterState") {
+          setSavedTagFilter(
+            msg.selectedTags,
+          );
         }
       });
     bridge.send({ type: "ready" });
@@ -83,5 +93,6 @@ export function useHostBridge(bridge: HostBridge): HostBridgeState {
     compilationStatus,
     compiledSql,
     compiledSqlError,
+    savedTagFilter,
   };
 }
