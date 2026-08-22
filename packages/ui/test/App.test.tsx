@@ -33,6 +33,52 @@ const graph: SerializedGraph = {
   downstream: [["src", ["mid"]]],
 };
 
+const taggedGraph: SerializedGraph = {
+  nodes: [
+    {
+      id: "raw_orders",
+      filePath: "def/raw_orders.sqlx",
+      type: "table",
+      tags: ["raw", "orders"],
+      refs: [],
+    },
+    {
+      id: "silver_orders",
+      filePath:
+        "def/silver_orders.sqlx",
+      type: "table",
+      tags: ["silver", "orders"],
+      refs: [],
+    },
+    {
+      id: "gold_orders",
+      filePath:
+        "def/gold_orders.sqlx",
+      type: "table",
+      tags: ["gold", "orders"],
+      refs: [],
+    },
+    {
+      id: "gold_sales",
+      filePath:
+        "def/gold_sales.sqlx",
+      type: "table",
+      tags: ["gold", "sales"],
+      refs: [],
+    },
+    {
+      id: "finance_report",
+      filePath:
+        "def/finance_report.sqlx",
+      type: "table",
+      tags: ["finance"],
+      refs: [],
+    },
+  ],
+
+  downstream: [],
+};
+
 describe("App", () => {
   it("requests the graph on mount and renders the node count", async () => {
     const bridge = new MockBridge(graph);
@@ -203,6 +249,305 @@ describe("App", () => {
       expect(
         await screen.findByText(
           "1 / 3 nodes",
+        ),
+      ).toBeInTheDocument();
+    },
+  );
+  it(
+    "searches available tags in the tag dropdown",
+    async () => {
+      const bridge =
+        new MockBridge(taggedGraph);
+
+      render(
+        <App bridge={bridge} />,
+      );
+
+      await screen.findByText(
+        "5 nodes",
+      );
+
+      const tagsLabel =
+        screen.getByText("Tags");
+
+      const summary =
+        tagsLabel.closest("summary");
+
+      expect(summary).not.toBeNull();
+
+      await userEvent.click(summary!);
+
+      const search =
+        screen.getByPlaceholderText(
+          "Search tags...",
+        );
+
+      await userEvent.type(
+        search,
+        "sil",
+      );
+
+      expect(
+        screen.getByRole(
+          "checkbox",
+          {
+            name: "silver",
+          },
+        ),
+      ).toBeInTheDocument();
+
+      expect(
+        screen.queryByRole(
+          "checkbox",
+          {
+            name: "gold",
+          },
+        ),
+      ).not.toBeInTheDocument();
+
+      expect(
+        screen.queryByRole(
+          "checkbox",
+          {
+            name: "orders",
+          },
+        ),
+      ).not.toBeInTheDocument();
+    },
+  );
+  it(
+    "filters by multiple selected tags",
+    async () => {
+      const bridge =
+        new MockBridge(taggedGraph);
+
+      render(
+        <App bridge={bridge} />,
+      );
+
+      await screen.findByText(
+        "5 nodes",
+      );
+
+      const summary =
+        screen
+          .getByText("Tags")
+          .closest("summary");
+
+      expect(summary).not.toBeNull();
+
+      await userEvent.click(summary!);
+
+      await userEvent.click(
+        screen.getByRole(
+          "checkbox",
+          {
+            name: "silver",
+          },
+        ),
+      );
+
+      expect(
+        await screen.findByText(
+          "1 / 5 nodes",
+        ),
+      ).toBeInTheDocument();
+
+      await userEvent.click(
+        screen.getByRole(
+          "checkbox",
+          {
+            name: "gold",
+          },
+        ),
+      );
+
+      expect(
+        await screen.findByText(
+          "3 / 5 nodes",
+        ),
+      ).toBeInTheDocument();
+
+      expect(
+        bridge.sent,
+      ).toContainEqual({
+        type: "setTagFilter",
+        selectedTags: [
+          "silver",
+          "gold",
+        ],
+      });
+    },
+  );
+  it(
+    "clears all selected tags",
+    async () => {
+      const bridge =
+        new MockBridge(taggedGraph);
+
+      render(
+        <App bridge={bridge} />,
+      );
+
+      await screen.findByText(
+        "5 nodes",
+      );
+
+      const summary =
+        screen
+          .getByText("Tags")
+          .closest("summary");
+
+      expect(summary).not.toBeNull();
+
+      await userEvent.click(summary!);
+
+      await userEvent.click(
+        screen.getByRole(
+          "checkbox",
+          {
+            name: "silver",
+          },
+        ),
+      );
+
+      await userEvent.click(
+        screen.getByRole(
+          "checkbox",
+          {
+            name: "gold",
+          },
+        ),
+      );
+
+      expect(
+        await screen.findByText(
+          "3 / 5 nodes",
+        ),
+      ).toBeInTheDocument();
+
+      await userEvent.click(
+        screen.getByRole(
+          "button",
+          {
+            name: "Clear all",
+          },
+        ),
+      );
+
+      expect(
+        await screen.findByText(
+          "5 nodes",
+        ),
+      ).toBeInTheDocument();
+
+      expect(
+        bridge.sent,
+      ).toContainEqual({
+        type: "setTagFilter",
+        selectedTags: [],
+      });
+    },
+  );
+  it(
+    "restores persisted tag filters on mount",
+    async () => {
+      const bridge =
+        new MockBridge(
+          taggedGraph,
+          {},
+          [
+            "silver",
+            "gold",
+          ],
+        );
+
+      render(
+        <App bridge={bridge} />,
+      );
+
+      expect(
+        await screen.findByText(
+          "3 / 5 nodes",
+        ),
+      ).toBeInTheDocument();
+
+      expect(
+        screen.getByText(
+          "silver, gold",
+        ),
+      ).toBeInTheDocument();
+
+      const summary =
+        screen
+          .getByText("Tags")
+          .closest("summary");
+
+      expect(summary).not.toBeNull();
+
+      await userEvent.click(summary!);
+
+      expect(
+        screen.getByRole(
+          "checkbox",
+          {
+            name: "silver",
+          },
+        ),
+      ).toBeChecked();
+
+      expect(
+        screen.getByRole(
+          "checkbox",
+          {
+            name: "gold",
+          },
+        ),
+      ).toBeChecked();
+
+      expect(
+        screen.getByRole(
+          "checkbox",
+          {
+            name: "raw",
+          },
+        ),
+      ).not.toBeChecked();
+    },
+  );
+  it(
+    "shows an empty state when no tags match the search",
+    async () => {
+      const bridge =
+        new MockBridge(taggedGraph);
+
+      render(
+        <App bridge={bridge} />,
+      );
+
+      await screen.findByText(
+        "5 nodes",
+      );
+
+      const summary =
+        screen
+          .getByText("Tags")
+          .closest("summary");
+
+      expect(summary).not.toBeNull();
+
+      await userEvent.click(summary!);
+
+      await userEvent.type(
+        screen.getByPlaceholderText(
+          "Search tags...",
+        ),
+        "does-not-exist",
+      );
+
+      expect(
+        screen.getByText(
+          "No matching tags",
         ),
       ).toBeInTheDocument();
     },

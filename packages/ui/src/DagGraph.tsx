@@ -181,19 +181,27 @@ function DagCanvas({ graph, selectedId, focus, onSelectNode }: DagGraphProps): J
       eds.map((e) => {
         const active = activeEdges != null && activeEdges.has(e.id);
         const faded = activeEdges != null && !active;
+        const edgeColor =
+          active
+            ? "var(--vscode-focusBorder, #334155)"
+            : "var(--vscode-editorWidget-border, #c3ccd6)";
+
         return {
           ...e,
+
           style: {
-            stroke: active ? "#334155" : "#c3ccd6",
+            stroke: edgeColor,
             strokeWidth: active ? 2 : 1.5,
             opacity: faded ? 0.12 : 1,
           },
+
           markerEnd: {
             type: MarkerType.ArrowClosed,
             width: 15,
             height: 15,
-            color: active ? "#334155" : "#c3ccd6",
+            color: edgeColor,
           },
+
           zIndex: active ? 10 : 0,
         };
       }),
@@ -229,7 +237,10 @@ function DagCanvas({ graph, selectedId, focus, onSelectNode }: DagGraphProps): J
       fitViewOptions={{ padding: 0.2 }}
       proOptions={{ hideAttribution: true }}
     >
-      <Background color="#dbe1e8" gap={20} />
+      <Background
+        color="var(--vscode-editorWidget-border, #dbe1e8)"
+        gap={20}
+      />
       <Controls showInteractive={false} />
       <MiniMap pannable zoomable nodeColor={(n) => (n.data as ModelNodeData).color} />
     </ReactFlow>

@@ -1,4 +1,12 @@
-import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import { activate } from "../src/extension.js";
 import {
   Uri,
@@ -48,6 +56,26 @@ const SERIALIZED = {
   ],
   edges: [],
 };
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (
+    reason?: unknown,
+  ) => void;
+
+  const promise = new Promise<T>(
+    (res, rej) => {
+      resolve = res;
+      reject = rej;
+    },
+  );
+
+  return {
+    promise,
+    resolve,
+    reject,
+  };
+}
 
 function fakeContext(
   initialState: Record<
@@ -159,6 +187,18 @@ beforeEach(() => {
   ];
 });
 
+afterEach(() => {
+  /*
+   * Dispose every controller/panel created by the test.
+   *
+   * This is important because GraphController may have
+   * a pending compilation warm-up timer.
+   */
+  for (const panel of records.panels) {
+    panel.emitDispose();
+  }
+});
+
 describe("activate", () => {
   it("registers the commands and pushes disposables", () => {
     const context = activateAndShow();
@@ -263,6 +303,141 @@ describe("message routing", () => {
         ).toHaveBeenCalledWith({
           type: "compiledSqlResult",
           nodeId: "customers",
+          sql:
+            "SELECT * FROM `project.demo.customers`",
+        }),
+      );
+    },
+  );
+  it(
+    "posts all compiled operation queries",
+    async () => {
+      findCompiledActionMock.mockReturnValue({
+        target: {
+          name: "publish_customers",
+        },
+        fileName:
+          "definitions/publish_operation.sqlx",
+        type: "operations",
+        queries: [
+          "DELETE FROM `project.demo.target` WHERE TRUE",
+          "INSERT INTO `project.demo.target` SELECT * FROM `project.demo.source`",
+        ],
+      });
+
+      activateAndShow();
+
+      lastPanel().webview.emitMessage({
+        type: "showCompiledSql",
+        nodeId: "publish_customers",
+        filePath:
+          "/proj/definitions/publish_operation.sqlx",
+      });
+
+      const expectedSql = [
+        "-- Operation 1",
+        "",
+        "DELETE FROM `project.demo.target` WHERE TRUE",
+        "",
+        "",
+        "-- Operation 2",
+        "",
+        "INSERT INTO `project.demo.target` SELECT * FROM `project.demo.source`",
+      ].join("\n");
+
+      await vi.waitFor(() =>
+        expect(
+          lastPanel().webview.postMessage,
+        ).toHaveBeenCalledWith({
+          type: "compiledSqlResult",
+          nodeId: "publish_customers",
+          sql: expectedSql,
+        }),
+      );
+    },
+  );
+  it(
+    "posts both full and incremental queries for incremental actions",
+    async () => {
+      findCompiledActionMock.mockReturnValue({
+        target: {
+          name: "customers_incremental",
+        },
+        fileName:
+          "definitions/customers_incremental.sqlx",
+        type: "incremental",
+        query:
+          "SELECT * FROM `project.demo.customers`",
+        incrementalQuery:
+          "SELECT * FROM `project.demo.customers` WHERE customer_id > 100",
+      });
+
+      activateAndShow();
+
+      lastPanel().webview.emitMessage({
+        type: "showCompiledSql",
+        nodeId: "customers_incremental",
+        filePath:
+          "/proj/definitions/customers_incremental.sqlx",
+      });
+
+      const expectedSql = [
+        "-- ========================================",
+        "-- FULL / INITIAL QUERY",
+        "-- ========================================",
+        "",
+        "SELECT * FROM `project.demo.customers`",
+        "",
+        "",
+        "-- ========================================",
+        "-- INCREMENTAL QUERY",
+        "-- ========================================",
+        "",
+        "SELECT * FROM `project.demo.customers` WHERE customer_id > 100",
+      ].join("\n");
+
+      await vi.waitFor(() =>
+        expect(
+          lastPanel().webview.postMessage,
+        ).toHaveBeenCalledWith({
+          type: "compiledSqlResult",
+          nodeId: "customers_incremental",
+          sql: expectedSql,
+        }),
+      );
+    },
+  );
+  it(
+    "does not duplicate identical incremental queries",
+    async () => {
+      findCompiledActionMock.mockReturnValue({
+        target: {
+          name: "customers_incremental",
+        },
+        fileName:
+          "definitions/customers_incremental.sqlx",
+        type: "incremental",
+        query:
+          "SELECT * FROM `project.demo.customers`",
+        incrementalQuery:
+          "SELECT * FROM `project.demo.customers`",
+      });
+
+      activateAndShow();
+
+      lastPanel().webview.emitMessage({
+        type: "showCompiledSql",
+        nodeId: "customers_incremental",
+        filePath:
+          "/proj/definitions/customers_incremental.sqlx",
+      });
+
+      await vi.waitFor(() =>
+        expect(
+          lastPanel().webview.postMessage,
+        ).toHaveBeenCalledWith({
+          type: "compiledSqlResult",
+          nodeId: "customers_incremental",
           sql:
             "SELECT * FROM `project.demo.customers`",
         }),
@@ -426,6 +601,148 @@ describe("watcher wiring", () => {
       watcherFor("**/dataform.json"),
     ).toBeDefined();
   });
+  it(
+    "debounces compilation warm-up after rapid changes",
+    async () => {
+      vi.useFakeTimers();
+
+      try {
+        activateAndShow();
+
+        const watcher =
+          watcherFor("**/*.js");
+
+        watcher.emitChange();
+        watcher.emitChange();
+        watcher.emitChange();
+
+        expect(
+          compileMock,
+        ).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(
+          299,
+        );
+
+        expect(
+          compileMock,
+        ).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(
+          1,
+        );
+
+        await Promise.resolve();
+
+        expect(
+          compileMock,
+        ).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
+    },
+  );
+  it(
+    "waits for a stale compilation before starting a new one",
+    async () => {
+      vi.useFakeTimers();
+
+      try {
+        const firstCompilation =
+          deferred<{
+            tables: [];
+            operations: [];
+            assertions: [];
+            declarations: [];
+          }>();
+
+        compileMock.mockImplementationOnce(
+          () =>
+            firstCompilation.promise,
+        );
+
+        activateAndShow();
+
+        /*
+         * Compilation #1 starts immediately because
+         * the user explicitly requests compiled SQL.
+         */
+        lastPanel().webview.emitMessage({
+          type: "showCompiledSql",
+          nodeId: "a",
+          filePath: "/proj/a.sqlx",
+        });
+
+        expect(
+          compileMock,
+        ).toHaveBeenCalledTimes(1);
+
+        /*
+         * A Dataform-related file changes while
+         * compilation #1 is still running.
+         *
+         * This invalidates the generation and schedules
+         * a debounced warm-up, but fake timers ensure
+         * that warm-up does not run during this test.
+         */
+        const watcher =
+          watcherFor("**/*.js");
+
+        watcher.emitChange();
+
+        /*
+         * The user requests SQL again before compilation
+         * #1 has completed.
+         */
+        lastPanel().webview.emitMessage({
+          type: "showCompiledSql",
+          nodeId: "a",
+          filePath: "/proj/a.sqlx",
+        });
+
+        /*
+         * Compilation #2 must NOT start in parallel.
+         */
+        expect(
+          compileMock,
+        ).toHaveBeenCalledTimes(1);
+
+        /*
+         * Finish compilation #1.
+         */
+        firstCompilation.resolve({
+          tables: [],
+          operations: [],
+          assertions: [],
+          declarations: [],
+        });
+
+        /*
+         * Flush the Promise chain.
+         */
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        /*
+         * Now compilation #2 may start for the new
+         * generation.
+         */
+        expect(
+          compileMock,
+        ).toHaveBeenCalledTimes(2);
+      } finally {
+        /*
+         * Discard the pending debounced warm-up.
+         * Otherwise it would introduce a third request
+         * unrelated to what this test is checking.
+         */
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
+    },
+  );
 });
 
 describe("focusActive", () => {

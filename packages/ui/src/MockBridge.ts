@@ -18,6 +18,7 @@ export class MockBridge implements HostBridge {
   constructor(
     private readonly graph: SerializedGraph,
     capabilities: Partial<HostCapabilities> = {},
+    initialSelectedTags: string[] = [],
   ) {
     this.capabilities = {
       openFile: false,
@@ -26,6 +27,10 @@ export class MockBridge implements HostBridge {
       focusOnActive: false,
       ...capabilities,
     };
+
+    this.selectedTags = [
+      ...initialSelectedTags,
+    ];
   }
   send(msg: OutboundMsg): void {
     this.sent.push(msg);

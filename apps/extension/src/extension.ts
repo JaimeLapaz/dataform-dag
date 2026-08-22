@@ -16,6 +16,8 @@ import {
 // React reaches the Node bundle.
 import type { InboundMsg, OutboundMsg } from "@dataform-dag/ui";
 
+const COMPILATION_WARMUP_DELAY_MS = 300;
+
 export function activate(context: vscode.ExtensionContext): void {
   const controller = new GraphController(context);
   context.subscriptions.push(
@@ -65,6 +67,7 @@ class GraphController implements vscode.Disposable {
   private compileInProgress:
     | {
       root: string;
+      generation: number;
       promise: Promise<CompileOutput>;
     }
     | undefined;
@@ -76,6 +79,10 @@ class GraphController implements vscode.Disposable {
    * being written back into the cache after it was invalidated.
    */
   private compilationGeneration = 0;
+
+  private compilationWarmupTimer:
+    | ReturnType<typeof setTimeout>
+    | undefined;
 
   private readSavedTagFilter():
     string[] {
@@ -315,8 +322,9 @@ class GraphController implements vscode.Disposable {
     root: string,
   ): Promise<CompileOutput> {
     /*
-    * Fast path: we already compiled this workspace.
-    */
+     * Fast path: this workspace is already compiled
+     * for the current generation.
+     */
     if (
       this.compiledOutputCache &&
       this.compiledOutputCache.root === root
@@ -330,19 +338,41 @@ class GraphController implements vscode.Disposable {
     }
 
     /*
-    * If Dataform is already compiling this same workspace,
-    * reuse that Promise instead of starting another process.
-    */
-    if (
-      this.compileInProgress &&
-      this.compileInProgress.root === root
-    ) {
+     * Never run two Dataform compilations at once.
+     *
+     * If the running compilation belongs to the current
+     * generation, reuse it.
+     *
+     * If it belongs to an older generation, wait for it
+     * to finish and then compile the latest project state.
+     */
+    if (this.compileInProgress) {
+      const running =
+        this.compileInProgress;
+
       this.post({
         type: "compilationStatus",
         status: "compiling",
       });
 
-      return this.compileInProgress.promise;
+      if (
+        running.root === root &&
+        running.generation ===
+        this.compilationGeneration
+      ) {
+        return running.promise;
+      }
+
+      try {
+        await running.promise;
+      } catch {
+        /*
+         * This compilation is stale, so its error is not
+         * relevant to the new generation.
+         */
+      }
+
+      return this.getCompiledOutput(root);
     }
 
     const generation =
@@ -358,6 +388,7 @@ class GraphController implements vscode.Disposable {
 
     const currentCompilation = {
       root,
+      generation,
       promise,
     };
 
@@ -367,6 +398,10 @@ class GraphController implements vscode.Disposable {
     try {
       const output = await promise;
 
+      /*
+       * Cache the result only if nothing changed while
+       * Dataform was compiling.
+       */
       if (
         this.compilationGeneration ===
         generation
@@ -384,6 +419,10 @@ class GraphController implements vscode.Disposable {
 
       return output;
     } catch (error) {
+      /*
+       * Only expose the error when it still belongs to
+       * the current generation.
+       */
       if (
         this.compilationGeneration ===
         generation
@@ -411,8 +450,6 @@ class GraphController implements vscode.Disposable {
 
     this.compiledOutputCache = undefined;
 
-    this.compileInProgress = undefined;
-
     this.post({
       type: "compilationStatus",
       status: "idle",
@@ -423,19 +460,37 @@ class GraphController implements vscode.Disposable {
     root: string,
   ): void {
     /*
-    * Warm-up is deliberately best-effort.
-    *
-    * Opening the DAG must continue working even when:
-    * - Dataform isn't installed
-    * - the Dataform project currently doesn't compile
-    * - a local JS/include has an error
-    *
-    * The user will receive the real error only if they
-    * explicitly request Compiled SQL.
-    */
-    void this.getCompiledOutput(root).catch(() => {
-      // Intentionally ignored.
-    });
+     * Several file-system events can arrive very close
+     * together when saving or changing Dataform files.
+     *
+     * Reset the timer so those events become a single
+     * compilation.
+     */
+    if (this.compilationWarmupTimer) {
+      clearTimeout(
+        this.compilationWarmupTimer,
+      );
+    }
+
+    this.compilationWarmupTimer =
+      setTimeout(() => {
+        this.compilationWarmupTimer =
+          undefined;
+
+        /*
+         * Warm-up is deliberately best-effort.
+         *
+         * Opening the DAG must continue working even when:
+         * - Dataform isn't installed
+         * - the project currently doesn't compile
+         * - a JS/include file has an error
+         */
+        void this.getCompiledOutput(
+          root,
+        ).catch(() => {
+          // Intentionally ignored.
+        });
+      }, COMPILATION_WARMUP_DELAY_MS);
   }
 
   private async postCompiledSqlForFile(
@@ -557,14 +612,14 @@ class GraphController implements vscode.Disposable {
         this.invalidateCompilationCache();
         void this.buildAndPost();
         return;
-      
+
       case "openFile":
         void vscode.window.showTextDocument(vscode.Uri.file(msg.filePath), {
           viewColumn: vscode.ViewColumn.One,
           preview: false,
         });
         return;
-      
+
       case "showCompiledSql":
         void this.postCompiledSqlForFile(
           msg.nodeId,
@@ -640,9 +695,31 @@ class GraphController implements vscode.Disposable {
       </html>`;
   }
 
+  private clearCompilationWarmupTimer():
+    void {
+    if (!this.compilationWarmupTimer) {
+      return;
+    }
+
+    clearTimeout(
+      this.compilationWarmupTimer,
+    );
+
+    this.compilationWarmupTimer =
+      undefined;
+  }
+
   private closePanel(): void {
+    this.clearCompilationWarmupTimer();
+
     this.panel = undefined;
-    for (const d of this.panelDisposables.splice(0)) d.dispose();
+
+    for (
+      const d of
+      this.panelDisposables.splice(0)
+    ) {
+      d.dispose();
+    }
   }
 
   dispose(): void {
