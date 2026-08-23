@@ -1,95 +1,385 @@
 # ROADMAP
 
-Working notes for whoever (human or Claude) picks this up next. Read `README.md` for what the tool
-*is*; this file is **current state + what to do next + what not to break**.
+Current state, priorities, and invariants for `dataform-dag`.
 
-## Where things stand (2026-07-19)
+Last updated: **2026-08-23**
 
-**MVP is done and green.** One shared core + one shared UI behind two hosts, all wired:
+Read [`README.md`](README.md) for the user/developer overview. This file focuses on what is implemented, what is next, and what should not regress.
 
-- `packages/core` — `.sqlx` regex parser, graph builder, two `GraphSource`s (regex `ParsedGraphSource`
-  default; `CompiledGraphSource` shells `dataform compile --json`, Node-only). 21 tests.
-- `packages/ui` — host-agnostic React Flow + ELK canvas, `HostBridge` seam, node detail, focus
-  highlighting. Runs standalone via `npm run dev:ui` against a mock graph. 13 tests.
-- `apps/extension` — VS Code webview host. esbuild bundles the Node extension + a single webview IIFE.
-  `GraphController` implements the host side (build / openFile / liveWatch / focus). 17 tests
-  (`GraphController` covered via an aliased `vscode` stub — see `test/mocks/vscode.ts`).
-- `apps/web` — browser host over the File System Access API (Chromium only). 3 tests.
+## Current state
 
-`npm install && npm run build:core && npm test` → **54 tests pass, typecheck clean, both hosts build.**
+The project now has one shared core graph model and one shared UI behind two hosts.
 
-### Verified vs. NOT verified
+### `packages/core`
 
-Everything checkable without a human is green (typecheck, tests, bundling, `vite dev` boots). What a
-machine **can't** self-check and a human still should:
+Implemented:
 
-1. **Extension render** — open `apps/extension` in VS Code → F5 → run *Dataform DAG: Show Graph* →
-   confirm the graph renders, node-click opens the `.sqlx`, editing a `.sqlx` live-updates it.
-2. **Web render** — `npm run dev -w @dataform-dag/web` → open in Chrome/Edge → pick a Dataform folder
-   → confirm the graph renders.
+- Lightweight `.sqlx` parser.
+- `ref()` dependency extraction.
+- Explicit `config.dependencies` support.
+- `config.name` target identity.
+- Graph construction and serialization.
+- Parsed and compiled graph sources.
+- `dataform compile --json` integration.
+- Compile-output lookup by file and target name.
+- Table, operation and assertion compile-output mapping.
+- Graph diagnostics for unresolved references.
+- Graph diagnostics for duplicate node IDs.
 
-Until someone does these two, "renders correctly" is asserted from build success, not observed.
+### `packages/ui`
 
-## Next up (roughly in priority order)
+Implemented:
 
-1. **Add CI.** No GitHub Actions yet. Wire a workflow: `npm ci` → `npm run build:core` →
-   `npm run typecheck` → `npm test` on push/PR. Fastest high-value win.
-2. **Push the import commit.** The initial code-import commit is **local-only** — not yet pushed to
-   `origin` (github.com/cadamsmith/dataform-dag). Confirm with the user before pushing.
-3. **~~Test `apps/extension/src/extension.ts`.~~ DONE (2026-07-19).** `GraphController` (buildAndPost /
-   focusActive / message routing / watcher wiring) is now covered by 14 tests in
-   `test/GraphController.test.ts`. The `vscode` module is aliased to a hand-rolled stub
-   (`test/mocks/vscode.ts`) via `vitest.config.ts` — it can't be `vi.mock`'d directly because it isn't
-   an installed package (only `@types/vscode`); Vitest resolves the specifier before the factory runs.
-   Core is mocked so the tests exercise orchestration, not core.
-4. **~~Package the extension as a `.vsix`.~~ DONE (2026-07-19).** `npm run package` in `apps/extension`
-   runs `vsce package --no-dependencies` and produces `dataform-dag-0.1.0.vsix` (~747 KB). Manifest
-   polished: `name` unscoped to `dataform-dag` (vsce rejects the `@scope/name` form → extension id is
-   now `cadamsmith.dataform-dag`), real `publisher: cadamsmith`, `icon.png` (a rendered DAG glyph),
-   `repository`/`bugs`/`homepage`/`keywords`/`galleryBanner`/`license`, version `0.1.0`. `LICENSE` is
-   copied into the package dir (vsce looks there, not the monorepo root). `.vscodeignore` ships only
-   `dist/` + manifest + README + LICENSE + icon — no `src/`, `test/`, `node_modules/`, or `.map`s
-   (verified by `unzip -l`). `--no-dependencies` is correct because everything is esbuild-bundled, so
-   the vsix needs zero `node_modules` (sidesteps the `*`-workspace-dep trap). `vscode:prepublish`
-   rebuilds core (`--prefix ../../packages/core`) then the extension. **NOT verified by machine:**
-   installing the `.vsix` into a real VS Code (`code --install-extension …`) and confirming it renders
-   — same human smoke test the MVP section flags. **Publishing is intentionally NOT done** (needs a
-   registered Marketplace publisher + a PAT — the user's credentialed step).
-5. **Web host is local-only — NOT deployed anywhere, and there are no plans to.** It's a static bundle
-   (`npm run build -w @dataform-dag/web`) run locally via `npm run dev -w @dataform-dag/web`; it exists
-   for local use and as the standalone proving ground for the shared UI. Don't wire up GitHub Pages /
-   Vercel / Netlify or any other hosting. Still worth doing locally: add a way to re-pick / switch
-   project folders (today you pick once on landing).
-6. **Expose `CompiledGraphSource` from a host.** Both hosts use the regex parser only. Add an opt-in
-   "high-fidelity" mode in the extension (it has a Node process + can run the CLI) so inline
-   `config.assertions` and JS-block refs show up. The seam already supports it; it's host wiring + UI.
-7. **UI features** now that nodes carry `tags`: tag/layer filtering, search, collapse-by-layer. Node
-   detail could show tags and the SQL preview.
+- React Flow graph canvas.
+- ELK layout with fallback layout.
+- Node detail panel.
+- VS Code theme integration.
+- Tag display.
+- Searchable multi-select tag filter.
+- Persistent tag-filter state supplied by the host.
+- One-hop dependency context around tag-filtered nodes.
+- Node-name search and graph navigation.
+- Compilation status indicator.
+- Inline Compiled SQL preview.
+- Copy / Hide controls.
+- Graph diagnostics UI.
+- Parsed / Compiled graph-mode selector when supported by the host.
 
-## Invariants — do NOT regress these (each was a real fix)
+### `apps/extension`
 
-- **Extension webview is ONE non-split IIFE bundle** (`apps/extension/build.mjs`, `splitting` off).
-  The shared UI lazy-`import()`s elkjs; a separate chunk would NOT carry the webview's CSP nonce and
-  would be blocked → elk never runs → graph silently falls back to dagre/bezier. Keep it inlined.
-  (Verified elkjs has no `eval`/`new Function`, so the nonce-only `script-src` runs it fine — don't
-  add `'unsafe-eval'` unless a future elk version needs it.)
-- **`@dataform-dag/core/browser`** is the browser-safe entry (parser + graph only). The main barrel
-  (`.`) re-exports `NodeFileSource` (`node:fs`) and `CompiledGraphSource` (`node:child_process`), which
-  break a browser bundle. The web host imports from `/browser`. Don't route browser code through `.`.
-- **`packages/ui` imports `@dataform-dag/core` for TYPES ONLY** (`import type`). This is what keeps
-  core's Node-only modules out of both UI bundles. Don't add a value import from core to the UI.
-- **Node identity = target name** (`config.name ?? basename`), not filename. Both graph sources key on
-  it so their outputs are interchangeable. (A file can rename itself, e.g. a declaration.)
-- **RF nodes are locked** (`nodesDraggable={false}`); the ELK layout is authoritative. Dragging +
-  interactive relayout was built then deliberately removed (positions aren't persisted; relayout
-  produced surprising crossings). Don't re-add it. Controlled RF nodes still MUST use
-  `useNodesState`/`useEdgesState` + change handlers or they render frozen (React Flow #002).
-- **Regex tier emits one node per file** (≈16 on the fixture); `dataform compile` emits more (≈24) —
-  the extra are inline `config.assertions` Dataform synthesizes. This is the documented tier boundary,
-  pinned by a golden `compile --json` fixture in core tests, NOT a bug to "fix" in the regex parser.
+Implemented:
 
-## Loose thread to check
+- VS Code webview host.
+- `Dataform DAG: Show Graph`.
+- Open selected `.sqlx`.
+- Focus graph node from active editor.
+- File-system watchers.
+- Parsed graph as the fast/default mode.
+- Compiled graph mode backed by `dataform compile --json`.
+- Compiled SQL preview.
+- Full/initial and incremental SQL variants.
+- `operations` query arrays.
+- `pre_operations` / `post_operations`.
+- Incremental pre/post-operation variants.
+- Compilation cache.
+- Background warm-up.
+- Debounce for rapid project changes.
+- Protection against concurrent Dataform compilations.
+- Cache invalidation for `.sqlx`, JS modules and Dataform configuration.
+- Persistent selected tags via VS Code `workspaceState`.
+- VSIX packaging.
 
-- `packages/ui/src/index.ts` still exports `layoutGraph` (the dagre layout). It's the runtime fallback
-  inside `useLayout` (keep that), but verify whether the *barrel export* is consumed anywhere; if not,
-  it can drop from the public surface. Low priority.
+### `apps/web`
+
+Implemented:
+
+- Local browser host using the File System Access API.
+- Parsed graph.
+- Shared UI and tag filtering.
+- No Node/Dataform CLI functionality.
+
+The web host remains intentionally local-only.
+
+## Parsed vs Compiled
+
+### Parsed
+
+Use when:
+
+- editing quickly,
+- the project does not currently compile,
+- Dataform CLI is unavailable,
+- lightweight dependency discovery is sufficient.
+
+Advantages:
+
+- fast,
+- tolerant,
+- browser-safe,
+- no compile process.
+
+Limitations:
+
+- cannot fully resolve JS-generated graph structure,
+- generated assertions differ from compiled output,
+- lightweight parsing may report an unresolved dependency that compilation later resolves.
+
+### Compiled
+
+Use when:
+
+- graph fidelity matters,
+- generated assertions should be visible,
+- dependencies are created through JS/includes,
+- the locally resolved Dataform graph is needed.
+
+Implementation rule:
+
+> Compiled graph and Compiled SQL must reuse the same cached compilation output. Do not introduce a second independent `dataform compile` pipeline.
+
+## Compiled SQL scope
+
+The extension resolves local Dataform compilation output.
+
+Supported preview content includes:
+
+- main query,
+- incremental query,
+- operation query arrays,
+- pre operations,
+- post operations,
+- incremental pre/post operations.
+
+This is **not** a BigQuery validator.
+
+The extension does not currently:
+
+- execute SQL,
+- issue BigQuery dry runs,
+- verify table existence,
+- verify columns or types against warehouse metadata.
+
+Keep local compilation and warehouse validation conceptually separate.
+
+## Filtering and navigation
+
+Tag filtering is intentionally generic.
+
+Do not hardcode meanings such as:
+
+- raw,
+- silver,
+- gold,
+- layer,
+- business domain.
+
+Current semantics:
+
+```text
+selectedTags ∩ node.tags != empty
+```
+
+Multiple selected tags therefore behave as OR.
+
+The optional **Context** mode includes only direct upstream/downstream boundary nodes. It must remain one hop unless the UI explicitly introduces a different expansion mode.
+
+Node search is navigation, not another graph filter.
+
+## Diagnostics
+
+Current diagnostics:
+
+- unresolved references,
+- duplicate graph IDs.
+
+Important distinction:
+
+- In Parsed mode, unresolved references can be parser limitations.
+- In Compiled mode, the graph represents Dataform-resolved output and is a higher-fidelity diagnostic context.
+
+Potential future diagnostic improvements:
+
+- distinguish unresolved `ref()` from explicit `config.dependencies`,
+- link diagnostics directly to source locations where possible,
+- summarize diagnostics by kind,
+- detect suspicious/self dependencies,
+- detect cycles explicitly and expose them in the UI,
+- make diagnostics filterable.
+
+## Next priorities
+
+### 1. CI
+
+Add GitHub Actions for:
+
+```text
+npm ci
+npm run build:core
+npm run typecheck
+npm test
+```
+
+Run on pushes and pull requests.
+
+This remains the highest-value maintenance improvement.
+
+### 2. Real VSIX smoke test
+
+Automated tests cover orchestration, but installation/rendering of the packaged `.vsix` should be smoke-tested in a real VS Code instance.
+
+Validate:
+
+- extension installation,
+- graph rendering,
+- Parsed/Compiled switching,
+- Compiled SQL preview,
+- file navigation,
+- theme switching,
+- tag persistence.
+
+### 3. Large-project performance
+
+Exercise projects with hundreds or thousands of actions.
+
+Measure:
+
+- ELK layout time,
+- React Flow render time,
+- serialization cost,
+- node-search responsiveness,
+- tag-filter responsiveness,
+- compile cache hit/miss behavior.
+
+Potential optimizations should be measured before implementation.
+
+### 4. Compilation cancellation
+
+Current orchestration prevents concurrent Dataform compilation but does not terminate an already-running stale child process.
+
+Future improvement:
+
+- retain the spawned process handle,
+- cancel stale compilation when safe,
+- keep generation guards as protection against stale results.
+
+Only add this if real projects show long compile times where cancellation matters.
+
+### 5. Accessibility / keyboard UX
+
+Improve:
+
+- keyboard navigation in Node Search,
+- keyboard navigation in Tag Filter,
+- active option semantics,
+- focus trapping/closing for dropdown-like controls,
+- diagnostic item navigation.
+
+### 6. Source-level diagnostics
+
+Where feasible, enrich graph issues with:
+
+- line/column,
+- dependency kind,
+- actionable source link.
+
+### 7. Web-host ergonomics
+
+The web host is a local proving ground, not a deployment target.
+
+Useful local-only improvements:
+
+- re-pick/switch project folder,
+- clearer browser capability messaging,
+- retain selected folder where browser APIs permit.
+
+Do not add cloud deployment unless project goals explicitly change.
+
+### 8. Documentation and release hygiene
+
+Keep synchronized:
+
+- root `README.md`,
+- `apps/extension/README.md`,
+- `ROADMAP.md`,
+- extension manifest description/features,
+- screenshots.
+
+Before release:
+
+- verify version,
+- rebuild core declarations,
+- run typecheck/tests,
+- build/package VSIX,
+- manually smoke-test the package.
+
+## Invariants — do not regress
+
+### One webview bundle
+
+The VS Code webview must remain one non-split IIFE bundle.
+
+The shared UI lazy-loads ELK-related code; extra webview chunks can conflict with the CSP nonce model.
+
+Do not enable code splitting without revisiting CSP/loading behavior.
+
+### Browser-safe core boundary
+
+Browser code must not pull Node-only modules such as:
+
+- `node:fs`,
+- `node:child_process`.
+
+Use the browser-safe core surface for browser/runtime imports.
+
+UI imports from core should remain type-only where possible.
+
+### Core declaration build
+
+Consumers resolve package declarations from `packages/core/dist`.
+
+After changing exported core types, rebuild core before consumer typechecking:
+
+```bash
+npm run build:core
+npm run typecheck
+```
+
+Do not mistake stale `dist/*.d.ts` for source-level type errors.
+
+### Node identity
+
+Graph node identity is the Dataform target name:
+
+```text
+config.name ?? filename-without-.sqlx
+```
+
+Explicit dependencies and compiled dependency targets must resolve against this identity.
+
+### Parsed and compiled graphs share one serialized contract
+
+Filtering, layout, search, diagnostics and node detail should work on either graph mode without mode-specific UI graph models.
+
+### Compiled graph reuses compilation cache
+
+Do not make switching to Compiled graph launch a separate compile path when valid output is already cached.
+
+### Stale compilation output must never win
+
+Compilation generation guards prevent a result produced for an old project state from replacing current cached output.
+
+Preserve this behavior even if cancellation is added later.
+
+### Debounced warm-up
+
+Rapid file-system events should collapse into a single background compile request.
+
+Do not reintroduce one `dataform compile` per watcher event.
+
+### ELK layout owns positions
+
+React Flow nodes are intentionally not draggable.
+
+Do not reintroduce free node dragging unless position persistence and relayout semantics are deliberately redesigned.
+
+### Parsed graph remains tolerant
+
+Do not turn Parsed mode into a compiler.
+
+Its value is that it can still render useful information when Dataform compilation is unavailable or broken.
+
+### Tag semantics remain generic
+
+Do not hardcode organization-specific tag conventions into the graph engine.
+
+## Release checklist
+
+```bash
+npm install
+npm run build:core
+npm run typecheck
+npm test
+npm run build
+```
+
+Then package and smoke-test the extension from `apps/extension`.
