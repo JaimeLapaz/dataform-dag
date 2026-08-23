@@ -50,7 +50,7 @@ Implemented:
 Implemented:
 
 - VS Code webview host.
-- `Dataform DAG: Show Graph`.
+- `Dataform DAG Explorer: Show Graph`.
 - Open selected `.sqlx`.
 - Focus graph node from active editor.
 - File-system watchers.
@@ -79,6 +79,16 @@ Implemented:
 - No Node/Dataform CLI functionality.
 
 The web host remains intentionally local-only.
+
+### CI
+
+Implemented:
+
+- GitHub Actions on pull requests and pushes to `main`.
+- `npm ci`.
+- Core build.
+- Typecheck.
+- Full test suite.
 
 ## Parsed vs Compiled
 
@@ -188,22 +198,8 @@ Potential future diagnostic improvements:
 
 ## Next priorities
 
-### 1. CI
 
-Add GitHub Actions for:
-
-```text
-npm ci
-npm run build:core
-npm run typecheck
-npm test
-```
-
-Run on pushes and pull requests.
-
-This remains the highest-value maintenance improvement.
-
-### 2. Real VSIX smoke test
+### 1. Real VSIX smoke test
 
 Automated tests cover orchestration, but installation/rendering of the packaged `.vsix` should be smoke-tested in a real VS Code instance.
 
@@ -217,7 +213,7 @@ Validate:
 - theme switching,
 - tag persistence.
 
-### 3. Large-project performance
+### 2. Large-project performance
 
 Exercise projects with hundreds or thousands of actions.
 
@@ -232,7 +228,7 @@ Measure:
 
 Potential optimizations should be measured before implementation.
 
-### 4. Compilation cancellation
+### 3. Compilation cancellation
 
 Current orchestration prevents concurrent Dataform compilation but does not terminate an already-running stale child process.
 
@@ -244,7 +240,7 @@ Future improvement:
 
 Only add this if real projects show long compile times where cancellation matters.
 
-### 5. Accessibility / keyboard UX
+### 4. Accessibility / keyboard UX
 
 Improve:
 
@@ -254,7 +250,7 @@ Improve:
 - focus trapping/closing for dropdown-like controls,
 - diagnostic item navigation.
 
-### 6. Source-level diagnostics
+### 5. Source-level diagnostics
 
 Where feasible, enrich graph issues with:
 
@@ -262,7 +258,7 @@ Where feasible, enrich graph issues with:
 - dependency kind,
 - actionable source link.
 
-### 7. Web-host ergonomics
+### 6. Web-host ergonomics
 
 The web host is a local proving ground, not a deployment target.
 
@@ -274,7 +270,7 @@ Useful local-only improvements:
 
 Do not add cloud deployment unless project goals explicitly change.
 
-### 8. Documentation and release hygiene
+### 7. Documentation and release hygiene
 
 Keep synchronized:
 

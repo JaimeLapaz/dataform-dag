@@ -220,7 +220,7 @@ In the Extension Development Host:
 
 1. Open a Dataform project folder.
 2. Open the Command Palette.
-3. Run **Dataform DAG: Show Graph**.
+3. Run **Dataform DAG Explorer: Show Graph**.
 
 See [`apps/extension/README.md`](apps/extension/README.md) for extension-specific details.
 

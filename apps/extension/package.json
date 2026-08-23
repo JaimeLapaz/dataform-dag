@@ -43,11 +43,13 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [],
-  "contributes": {
+  "capabilities": {
     "untrustedWorkspaces": {
       "supported": false,
       "description": "Dataform DAG Explorer reads project files and can run local Dataform compilation, which may evaluate project JavaScript."
-    },
+    }
+  },
+  "contributes": {
     "commands": [
       {
         "command": "dataformDagExplorer.showGraph",
