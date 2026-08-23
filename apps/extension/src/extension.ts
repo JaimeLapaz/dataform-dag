@@ -3,6 +3,7 @@ import * as path from "node:path";
 import {
   NodeFileSource,
   buildGraphFromWorkspace,
+  graphFromCompileOutput,
   serializeGraph,
 
   compileDataformProject,
@@ -14,7 +15,11 @@ import {
 } from "@dataform-dag/core";
 // The wire protocol is defined once in the UI package; the host imports it as types only, so no
 // React reaches the Node bundle.
-import type { InboundMsg, OutboundMsg } from "@dataform-dag/ui";
+import type {
+  GraphMode,
+  InboundMsg,
+  OutboundMsg,
+} from "@dataform-dag/ui";
 
 const COMPILATION_WARMUP_DELAY_MS = 300;
 
@@ -57,6 +62,85 @@ class GraphController implements vscode.Disposable {
       output: CompileOutput;
     }
     | undefined;
+
+  private graphMode: GraphMode =
+    "parsed";
+
+  private postSerializedGraph(
+    serialized: SerializedGraph,
+    root: string,
+    resolveRelativePaths: boolean,
+  ): void {
+    const graph: SerializedGraph =
+      resolveRelativePaths
+        ? {
+          ...serialized,
+
+          nodes:
+            serialized.nodes.map(
+              (node) => ({
+                ...node,
+
+                filePath:
+                  path.isAbsolute(
+                    node.filePath,
+                  )
+                    ? node.filePath
+                    : path.resolve(
+                      root,
+                      node.filePath,
+                    ),
+              }),
+            ),
+        }
+        : serialized;
+
+    /*
+     * A compiled .sqlx can produce several actions,
+     * for example a table and generated assertions.
+     *
+     * Keep the first action associated with the file
+     * instead of overwriting it with a generated
+     * assertion later in the list.
+     */
+    this.idByPath =
+      new Map<string, string>();
+
+    for (const node of graph.nodes) {
+      if (
+        !this.idByPath.has(
+          node.filePath,
+        )
+      ) {
+        this.idByPath.set(
+          node.filePath,
+          node.id,
+        );
+      }
+    }
+
+    this.post({
+      type: "graphUpdate",
+      graph,
+    });
+  }
+
+  private postCompiledGraph(
+    root: string,
+    output: CompileOutput,
+  ): void {
+    const graph =
+      graphFromCompileOutput(output);
+
+    const serialized =
+      serializeGraph(graph);
+
+    this.postSerializedGraph(
+      serialized,
+      root,
+      true,
+    );
+  }
 
   /**
    * Compilation currently running.
@@ -245,7 +329,32 @@ class GraphController implements vscode.Disposable {
     const rebuild = (): void => {
       this.invalidateCompilationCache();
 
-      void this.buildAndPost();
+      const root =
+        vscode.workspace
+          .workspaceFolders?.[0]
+          ?.uri.fsPath;
+
+      /*
+       * Parsed mode remains immediate.
+       */
+      if (
+        this.graphMode ===
+        "parsed"
+      ) {
+        void this.buildAndPost();
+        return;
+      }
+
+      /*
+       * Compiled mode needs Dataform compilation, so apply
+       * the same debounce used by compilation warm-up.
+       */
+      if (root) {
+        this.warmCompilationCache(
+          root,
+          true,
+        );
+      }
     };
     watcher.onDidChange(rebuild, undefined, this.panelDisposables);
     watcher.onDidCreate(rebuild, undefined, this.panelDisposables);
@@ -281,7 +390,11 @@ class GraphController implements vscode.Disposable {
             ?.uri.fsPath;
 
         if (root) {
-          this.warmCompilationCache(root);
+          this.warmCompilationCache(
+            root,
+            this.graphMode ===
+            "compiled",
+          );
         }
       };
 
@@ -458,6 +571,7 @@ class GraphController implements vscode.Disposable {
 
   private warmCompilationCache(
     root: string,
+    refreshCompiledGraph = false,
   ): void {
     /*
      * Several file-system events can arrive very close
@@ -485,11 +599,27 @@ class GraphController implements vscode.Disposable {
          * - the project currently doesn't compile
          * - a JS/include file has an error
          */
-        void this.getCompiledOutput(
-          root,
-        ).catch(() => {
-          // Intentionally ignored.
-        });
+        const generation =
+          this.compilationGeneration;
+
+        void this.getCompiledOutput(root)
+          .then((output) => {
+            if (
+              refreshCompiledGraph &&
+              this.graphMode ===
+              "compiled" &&
+              generation ===
+              this.compilationGeneration
+            ) {
+              this.postCompiledGraph(
+                root,
+                output,
+              );
+            }
+          })
+          .catch(() => {
+            // Intentionally ignored.
+          });
       }, COMPILATION_WARMUP_DELAY_MS);
   }
 
@@ -599,6 +729,11 @@ class GraphController implements vscode.Disposable {
             this.selectedTags,
         });
 
+        this.post({
+          type: "graphModeState",
+          mode: this.graphMode,
+        });
+
         void this.buildAndPost();
         return;
 
@@ -627,28 +762,95 @@ class GraphController implements vscode.Disposable {
         );
 
         return;
+
+      case "setGraphMode":
+        if (
+          msg.mode === this.graphMode
+        ) {
+          return;
+        }
+
+        this.graphMode = msg.mode;
+
+        this.post({
+          type: "graphModeState",
+          mode: this.graphMode,
+        });
+
+        void this.buildAndPost();
+        return;
     }
   }
 
-  private async buildAndPost(): Promise<void> {
-    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  private async buildAndPost():
+    Promise<void> {
+    const root =
+      vscode.workspace
+        .workspaceFolders?.[0]
+        ?.uri.fsPath;
+
     if (!root) {
-      vscode.window.showWarningMessage("Dataform DAG: open a folder to view its .sqlx graph.");
+      vscode.window.showWarningMessage(
+        "Dataform DAG: open a folder to view its .sqlx graph.",
+      );
+
       return;
     }
+
     try {
-      const graph = await buildGraphFromWorkspace(new NodeFileSource(root));
-      const serialized = serializeGraph(graph);
-      this.idByPath = new Map(serialized.nodes.map((n) => [n.filePath, n.id]));
-      this.post({ type: "graphUpdate", graph: serialized });
       /*
-      * Start Dataform compilation in the background.
-      *
-      * Do NOT await this: rendering the DAG should remain fast.
-      */
-      this.warmCompilationCache(root);
+       * High-fidelity graph.
+       *
+       * Reuse the same cached compile output used by the
+       * Compiled SQL preview. Never spawn an independent
+       * dataform process here.
+       */
+      if (
+        this.graphMode ===
+        "compiled"
+      ) {
+        const output =
+          await this.getCompiledOutput(
+            root,
+          );
+
+        this.postCompiledGraph(
+          root,
+          output,
+        );
+
+        return;
+      }
+
+      /*
+       * Fast/default graph.
+       */
+      const graph =
+        await buildGraphFromWorkspace(
+          new NodeFileSource(root),
+        );
+
+      const serialized =
+        serializeGraph(graph);
+
+      this.postSerializedGraph(
+        serialized,
+        root,
+        false,
+      );
+
+      /*
+       * Parsed mode remains instant. Compilation is only
+       * warmed in the background for SQL preview / a future
+       * switch to Compiled mode.
+       */
+      this.warmCompilationCache(
+        root,
+      );
     } catch (err) {
-      vscode.window.showErrorMessage(`Dataform DAG: could not build the graph — ${String(err)}`);
+      vscode.window.showErrorMessage(
+        `Dataform DAG: could not build the graph — ${formatError(err)}`,
+      );
     }
   }
 
@@ -731,7 +933,7 @@ function buildCompiledSqlPreview(
   action: CompileAction,
 ): string | undefined {
   /*
-   * Operations pueden tener varias sentencias SQL.
+   * Operations pueden contener varias sentencias SQL.
    */
   if (action.queries?.length) {
     return action.queries
@@ -743,53 +945,172 @@ function buildCompiledSqlPreview(
   }
 
   /*
-   * Para una incremental Dataform genera dos posibilidades:
-   *
-   * 1. query             -> carga inicial/full
-   * 2. incrementalQuery  -> ejecución incremental
-   *
-   * Sin consultar BigQuery no sabemos si la tabla ya existe,
-   * así que mostramos las dos.
+   * SQL usado para una ejecución full / inicial.
    */
-  if (
-    action.incrementalQuery &&
-    action.incrementalQuery !== action.query
-  ) {
-    const fullQuery = [
-      "-- ========================================",
-      "-- FULL / INITIAL QUERY",
-      "-- ========================================",
-      "",
-      action.query ?? "",
-    ].join("\n");
-
-    const incrementalQuery = [
-      "-- ========================================",
-      "-- INCREMENTAL QUERY",
-      "-- ========================================",
-      "",
-      action.incrementalQuery,
-    ].join("\n");
-
-    return [
-      fullQuery,
-      "",
-      "",
-      incrementalQuery,
-    ].join("\n");
-  }
+  const fullSql = buildQueryWithOperations(
+    action.query,
+    action.preOps,
+    action.postOps,
+  );
 
   /*
-   * Tables, views y assertions.
+   * SQL usado para una ejecución incremental.
    *
-   * Esto es justo lo que buscamos:
-   * la SQL resultante de la compilación Dataform.
+   * Dataform puede generar versiones diferentes tanto
+   * de la query como de pre_operations/post_operations.
+   *
+   * Cuando no existe una variante incremental concreta,
+   * reutilizamos la versión full.
    */
-  if (action.query) {
-    return action.query;
+  const incrementalSql =
+    buildQueryWithOperations(
+      action.incrementalQuery ??
+      action.query,
+
+      action.incrementalPreOps ??
+      action.preOps,
+
+      action.incrementalPostOps ??
+      action.postOps,
+    );
+
+  /*
+   * Si ambos caminos producen exactamente lo mismo,
+   * no tiene sentido duplicar la SQL.
+   */
+  if (
+    fullSql &&
+    incrementalSql &&
+    fullSql !== incrementalSql
+  ) {
+    return [
+      buildExecutionSection(
+        "FULL / INITIAL QUERY",
+        fullSql,
+      ),
+      "",
+      "",
+      buildExecutionSection(
+        "INCREMENTAL QUERY",
+        incrementalSql,
+      ),
+    ].join("\n");
   }
 
-  return undefined;
+  return fullSql ?? incrementalSql;
+}
+
+function buildQueryWithOperations(
+  query: string | undefined,
+  preOps:
+    | string[]
+    | null
+    | undefined,
+  postOps:
+    | string[]
+    | null
+    | undefined,
+): string | undefined {
+  const preOperations =
+    joinSqlStatements(preOps);
+
+  const postOperations =
+    joinSqlStatements(postOps);
+
+  /*
+   * Caso habitual: solo existe la query.
+   *
+   * Conservamos exactamente el comportamiento anterior
+   * y no añadimos encabezados innecesarios.
+   */
+  if (
+    !preOperations &&
+    !postOperations
+  ) {
+    return query;
+  }
+
+  const sections: string[] = [];
+
+  if (preOperations) {
+    sections.push(
+      buildSqlSection(
+        "PRE OPERATIONS",
+        preOperations,
+      ),
+    );
+  }
+
+  if (query) {
+    sections.push(
+      buildSqlSection(
+        "MAIN QUERY",
+        query,
+      ),
+    );
+  }
+
+  if (postOperations) {
+    sections.push(
+      buildSqlSection(
+        "POST OPERATIONS",
+        postOperations,
+      ),
+    );
+  }
+
+  if (sections.length === 0) {
+    return undefined;
+  }
+
+  return sections.join("\n\n\n");
+}
+
+function joinSqlStatements(
+  statements:
+    | string[]
+    | null
+    | undefined,
+): string | undefined {
+  const nonEmptyStatements =
+    (statements ?? []).filter(
+      (statement) =>
+        statement.trim().length > 0,
+    );
+
+  if (
+    nonEmptyStatements.length === 0
+  ) {
+    return undefined;
+  }
+
+  return nonEmptyStatements.join(
+    "\n\n",
+  );
+}
+
+function buildSqlSection(
+  title: string,
+  sql: string,
+): string {
+  return [
+    `-- ${title}`,
+    "",
+    sql,
+  ].join("\n");
+}
+
+function buildExecutionSection(
+  title: string,
+  sql: string,
+): string {
+  return [
+    "-- ========================================",
+    `-- ${title}`,
+    "-- ========================================",
+    "",
+    sql,
+  ].join("\n");
 }
 
 function formatError(error: unknown): string {

@@ -19,6 +19,7 @@ import {
   window,
   workspace,
 } from "./mocks/vscode.js";
+import * as path from "node:path";
 
 // The controller's build path goes through core; mock it so these tests exercise the controller's
 // orchestration (routing / watcher wiring / focus mapping / error handling), not core itself.
@@ -28,6 +29,7 @@ vi.mock("@dataform-dag/core", () => ({
   },
 
   buildGraphFromWorkspace: vi.fn(),
+  graphFromCompileOutput: vi.fn(),
   serializeGraph: vi.fn(),
 
   compileDataformProject: vi.fn(),
@@ -35,18 +37,18 @@ vi.mock("@dataform-dag/core", () => ({
 }));
 import {
   buildGraphFromWorkspace,
+  graphFromCompileOutput,
   serializeGraph,
   compileDataformProject,
   findCompiledActionByFile,
 } from "@dataform-dag/core";
 
 const buildMock = buildGraphFromWorkspace as unknown as Mock;
+const compiledGraphMock = graphFromCompileOutput as unknown as Mock;
 const serializeMock = serializeGraph as unknown as Mock;
-const compileMock =
-  compileDataformProject as unknown as Mock;
+const compileMock = compileDataformProject as unknown as Mock;
 
-const findCompiledActionMock =
-  findCompiledActionByFile as unknown as Mock;
+const findCompiledActionMock = findCompiledActionByFile as unknown as Mock;
 
 /** A serialized graph with two nodes, so focus mapping (filePath → id) has something to resolve. */
 const SERIALIZED = {
@@ -266,6 +268,126 @@ describe("message routing", () => {
     });
   });
 
+  it(
+    "switches back to the parsed graph",
+    async () => {
+      activateAndShow();
+
+      lastPanel().webview.emitMessage({
+        type: "setGraphMode",
+        mode: "compiled",
+      });
+
+      await vi.waitFor(() =>
+        expect(
+          compiledGraphMock,
+        ).toHaveBeenCalled(),
+      );
+
+      buildMock.mockClear();
+
+      lastPanel().webview.emitMessage({
+        type: "setGraphMode",
+        mode: "parsed",
+      });
+
+      await vi.waitFor(() =>
+        expect(
+          buildMock,
+        ).toHaveBeenCalledTimes(1),
+      );
+    },
+  );
+
+  it(
+    "builds the graph from compile output in compiled mode",
+    async () => {
+      const output = {
+        tables: [
+          {
+            target: {
+              name: "customers",
+            },
+            fileName:
+              "definitions/customers.sqlx",
+            dependencyTargets: [],
+          },
+        ],
+        operations: [],
+        assertions: [],
+        declarations: [],
+      };
+
+      compileMock.mockResolvedValue(
+        output,
+      );
+
+      const compiledGraph = {
+        nodes: new Map(),
+        downstreamMap: new Map(),
+      };
+
+      compiledGraphMock.mockReturnValue(
+        compiledGraph,
+      );
+
+      serializeMock.mockReturnValue({
+        nodes: [
+          {
+            id: "customers",
+            filePath:
+              "definitions/customers.sqlx",
+            type: "table",
+            tags: [],
+            refs: [],
+          },
+        ],
+        downstream: [],
+      });
+
+      activateAndShow();
+
+      lastPanel().webview.emitMessage({
+        type: "setGraphMode",
+        mode: "compiled",
+      });
+
+      await vi.waitFor(() =>
+        expect(
+          compiledGraphMock,
+        ).toHaveBeenCalledWith(
+          output,
+        ),
+      );
+
+      expect(
+        buildMock,
+      ).not.toHaveBeenCalled();
+
+      expect(
+        lastPanel().webview.postMessage,
+      ).toHaveBeenCalledWith({
+        type: "graphUpdate",
+        graph: {
+          nodes: [
+            {
+              id: "customers",
+              filePath:
+                path.resolve(
+                  "/proj",
+                  "definitions/customers.sqlx",
+                ),
+              type: "table",
+              tags: [],
+              refs: [],
+            },
+          ],
+          downstream: [],
+        },
+      });
+    },
+  );
+
   it("opens the file in column one on 'openFile'", () => {
     activateAndShow();
     lastPanel().webview.emitMessage({ type: "openFile", filePath: "/proj/a.sqlx" });
@@ -307,6 +429,138 @@ describe("message routing", () => {
             "SELECT * FROM `project.demo.customers`",
         }),
       );
+    },
+  );
+  it(
+    "includes pre and post operations in compiled SQL",
+    async () => {
+      findCompiledActionMock.mockReturnValue({
+        target: {
+          name: "customers",
+        },
+
+        fileName:
+          "definitions/customers.sqlx",
+
+        query:
+          "SELECT * FROM `project.demo.customers`",
+
+        preOps: [
+          "DECLARE run_date DATE DEFAULT CURRENT_DATE();",
+        ],
+
+        postOps: [
+          "INSERT INTO `project.demo.audit` VALUES ('done');",
+        ],
+      });
+
+      activateAndShow();
+
+      lastPanel().webview.emitMessage({
+        type: "showCompiledSql",
+        nodeId: "customers",
+        filePath:
+          "/proj/definitions/customers.sqlx",
+      });
+
+      const expectedSql = [
+        "-- PRE OPERATIONS",
+        "",
+        "DECLARE run_date DATE DEFAULT CURRENT_DATE();",
+        "",
+        "",
+        "-- MAIN QUERY",
+        "",
+        "SELECT * FROM `project.demo.customers`",
+        "",
+        "",
+        "-- POST OPERATIONS",
+        "",
+        "INSERT INTO `project.demo.audit` VALUES ('done');",
+      ].join("\n");
+
+      await vi.waitFor(() =>
+        expect(
+          lastPanel().webview.postMessage,
+        ).toHaveBeenCalledWith({
+          type: "compiledSqlResult",
+          nodeId: "customers",
+          sql: expectedSql,
+        }),
+      );
+    },
+  );
+  it(
+    "includes every compiled pre and post operation",
+    async () => {
+      findCompiledActionMock.mockReturnValue({
+        target: {
+          name: "customers",
+        },
+
+        fileName:
+          "definitions/customers.sqlx",
+
+        query:
+          "SELECT 1 AS customer_id",
+
+        preOps: [
+          "DECLARE environment STRING DEFAULT 'dev';",
+          "DECLARE run_date DATE DEFAULT CURRENT_DATE();",
+        ],
+
+        postOps: [
+          "INSERT INTO `project.demo.audit` VALUES ('customers');",
+          "SELECT 'finished';",
+        ],
+      });
+
+      activateAndShow();
+
+      lastPanel().webview.emitMessage({
+        type: "showCompiledSql",
+        nodeId: "customers",
+        filePath:
+          "/proj/definitions/customers.sqlx",
+      });
+
+      await vi.waitFor(() => {
+        const calls =
+          (
+            lastPanel()
+              .webview
+              .postMessage as Mock
+          ).mock.calls;
+
+        const result =
+          calls
+            .map(([message]) => message)
+            .find(
+              (message) =>
+                message.type ===
+                "compiledSqlResult",
+            );
+
+        expect(result?.sql).toContain(
+          "DECLARE environment STRING DEFAULT 'dev';",
+        );
+
+        expect(result?.sql).toContain(
+          "DECLARE run_date DATE DEFAULT CURRENT_DATE();",
+        );
+
+        expect(result?.sql).toContain(
+          "SELECT 1 AS customer_id",
+        );
+
+        expect(result?.sql).toContain(
+          "INSERT INTO `project.demo.audit` VALUES ('customers');",
+        );
+
+        expect(result?.sql).toContain(
+          "SELECT 'finished';",
+        );
+      });
     },
   );
   it(
@@ -405,6 +659,100 @@ describe("message routing", () => {
           sql: expectedSql,
         }),
       );
+    },
+  );
+  it(
+    "includes full and incremental pre and post operations",
+    async () => {
+      findCompiledActionMock.mockReturnValue({
+        target: {
+          name:
+            "customers_incremental",
+        },
+
+        fileName:
+          "definitions/customers_incremental.sqlx",
+
+        type: "incremental",
+
+        query:
+          "SELECT * FROM `project.demo.customers`",
+
+        preOps: [
+          "DECLARE max_id INT64 DEFAULT 0;",
+        ],
+
+        postOps: [
+          "SELECT 'full finished';",
+        ],
+
+        incrementalQuery:
+          "SELECT * FROM `project.demo.customers` WHERE customer_id > max_id",
+
+        incrementalPreOps: [
+          "DECLARE max_id INT64 DEFAULT 100;",
+        ],
+
+        incrementalPostOps: [
+          "SELECT 'incremental finished';",
+        ],
+      });
+
+      activateAndShow();
+
+      lastPanel().webview.emitMessage({
+        type: "showCompiledSql",
+        nodeId:
+          "customers_incremental",
+        filePath:
+          "/proj/definitions/customers_incremental.sqlx",
+      });
+
+      await vi.waitFor(() => {
+        const calls =
+          (
+            lastPanel()
+              .webview
+              .postMessage as Mock
+          ).mock.calls;
+
+        const result =
+          calls
+            .map(([message]) => message)
+            .find(
+              (message) =>
+                message.type ===
+                "compiledSqlResult",
+            );
+
+        expect(result?.sql).toContain(
+          "-- FULL / INITIAL QUERY",
+        );
+
+        expect(result?.sql).toContain(
+          "DECLARE max_id INT64 DEFAULT 0;",
+        );
+
+        expect(result?.sql).toContain(
+          "SELECT 'full finished';",
+        );
+
+        expect(result?.sql).toContain(
+          "-- INCREMENTAL QUERY",
+        );
+
+        expect(result?.sql).toContain(
+          "DECLARE max_id INT64 DEFAULT 100;",
+        );
+
+        expect(result?.sql).toContain(
+          "WHERE customer_id > max_id",
+        );
+
+        expect(result?.sql).toContain(
+          "SELECT 'incremental finished';",
+        );
+      });
     },
   );
   it(

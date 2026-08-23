@@ -5,6 +5,7 @@ import { useHostBridge } from "./useHostBridge.js";
 import {
   NODE_COLORS,
   downstreamOf,
+  filterGraphByTagsWithBoundary,
   filterGraphByTags,
   graphTags,
   indexGraph,
@@ -15,6 +16,7 @@ import { DagGraph } from "./DagGraph.js";
 import { NodeDetailPanel } from "./NodeDetailPanel.js";
 import "./app.css";
 import { TagFilter } from "./TagFilter.js";
+import { NodeSearch } from "./NodeSearch.js";
 
 export interface AppProps {
   bridge: HostBridge;
@@ -29,10 +31,23 @@ export function App({ bridge }: AppProps): JSX.Element {
     compiledSql,
     compiledSqlError,
     savedTagFilter,
+    graphMode,
   } = useHostBridge(bridge);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [
+    navigationFocus,
+    setNavigationFocus,
+  ] = useState<{
+    nodeId: string;
+    nonce: number;
+  } | null>(null);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [
+    showBoundaryDependencies,
+    setShowBoundaryDependencies,
+  ] = useState(false);
   const tagFilterRestored = useRef(false);
+
 
   const persistTagFilter = (
     nextTags: string[],
@@ -60,6 +75,10 @@ export function App({ bridge }: AppProps): JSX.Element {
   };
 
   const clearTags = (): void => {
+    setShowBoundaryDependencies(
+      false,
+    );
+
     persistTagFilter([]);
   };
 
@@ -73,16 +92,65 @@ export function App({ bridge }: AppProps): JSX.Element {
     [graph],
   );
 
-  const filteredGraph = useMemo(
+  const tagFilteredView = useMemo(
     () =>
       graph
-        ? filterGraphByTags(
+        ? filterGraphByTagsWithBoundary(
           graph,
           selectedTags,
+          showBoundaryDependencies,
         )
         : null,
-    [graph, selectedTags],
+    [
+      graph,
+      selectedTags,
+      showBoundaryDependencies,
+    ],
   );
+
+  const filteredGraph =
+    tagFilteredView?.graph ?? null;
+
+  const boundaryNodeIds =
+    tagFilteredView?.boundaryNodeIds;
+
+  const visibleNodeIds = useMemo(
+    () =>
+      filteredGraph
+        ? filteredGraph.nodes.map(
+          (node) => node.id,
+        )
+        : [],
+    [filteredGraph],
+  );
+
+  const navigateToNode = (
+    nodeId: string,
+  ): void => {
+    setSelectedId(nodeId);
+
+    setNavigationFocus(
+      (current) => ({
+        nodeId,
+        nonce:
+          (current?.nonce ?? 0) + 1,
+      }),
+    );
+  };
+
+  useEffect(() => {
+    setSelectedId(null);
+  }, [graphMode]);
+
+  useEffect(() => {
+    if (!focusRequest) {
+      return;
+    }
+
+    setNavigationFocus(
+      focusRequest,
+    );
+  }, [focusRequest]);
 
   useEffect(() => {
     if (
@@ -152,6 +220,37 @@ export function App({ bridge }: AppProps): JSX.Element {
         <h1 className="ddag-topbar__title">dataform-dag</h1>
         <Legend />
 
+        {capabilities.compiledGraph && (
+          <label className="ddag-graph-mode">
+            <span className="ddag-graph-mode__label">
+              Graph
+            </span>
+
+            <select
+              className="ddag-graph-mode__select"
+              value={graphMode}
+              onChange={(event) => {
+                bridge.send({
+                  type: "setGraphMode",
+                  mode:
+                    event.target.value ===
+                      "compiled"
+                      ? "compiled"
+                      : "parsed",
+                });
+              }}
+            >
+              <option value="parsed">
+                Parsed
+              </option>
+
+              <option value="compiled">
+                Compiled
+              </option>
+            </select>
+          </label>
+        )}
+
         {graph &&
           availableTags.length > 0 && (
             <TagFilter
@@ -162,15 +261,63 @@ export function App({ bridge }: AppProps): JSX.Element {
             />
           )}
 
+        {selectedTags.length > 0 && (
+          <label
+            className="ddag-boundary-toggle"
+            title={
+              "Show direct upstream and downstream nodes outside the selected tags"
+            }
+          >
+            <input
+              type="checkbox"
+              checked={
+                showBoundaryDependencies
+              }
+              onChange={(event) =>
+                setShowBoundaryDependencies(
+                  event.target.checked,
+                )
+              }
+            />
+
+            <span>
+              Context
+            </span>
+          </label>
+        )}
+
         <div className="ddag-topbar__spacer" />
 
         {graph && filteredGraph && (
           <span className="ddag-topbar__count">
             {selectedTags.length > 0
-              ? `${filteredGraph.nodes.length} / ${graph.nodes.length} nodes`
+              ? (
+                showBoundaryDependencies &&
+                  tagFilteredView &&
+                  tagFilteredView
+                    .boundaryNodeIds.size > 0
+                  ? `${tagFilteredView
+                    .matchedNodeIds.size
+                  } matched + ${tagFilteredView
+                    .boundaryNodeIds.size
+                  } context / ${graph.nodes.length
+                  } nodes`
+                  : `${filteredGraph.nodes.length
+                  } / ${graph.nodes.length
+                  } nodes`
+              )
               : `${graph.nodes.length} nodes`}
           </span>
         )}
+
+        {filteredGraph &&
+          filteredGraph.nodes.length > 0 && (
+            <NodeSearch
+              nodeIds={visibleNodeIds}
+              onSelect={navigateToNode}
+            />
+          )}
+
         {!capabilities.liveWatch && (
           <button
             type="button"
@@ -187,7 +334,8 @@ export function App({ bridge }: AppProps): JSX.Element {
             <DagGraph
               graph={flow}
               selectedId={selectedId}
-              focus={focusRequest}
+              focus={navigationFocus}
+              boundaryNodeIds={boundaryNodeIds}
               onSelectNode={setSelectedId}
             />
           ) : (

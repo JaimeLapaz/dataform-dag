@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type {
   CompilationStatus,
+  GraphMode,
   HostBridge,
   SerializedGraph,
 } from "./HostBridge.js";
@@ -14,6 +15,8 @@ export interface HostBridgeState {
   } | null;
 
   compilationStatus: CompilationStatus;
+
+  graphMode: GraphMode;
 
   compiledSql: {
     nodeId: string;
@@ -43,6 +46,7 @@ export function useHostBridge(bridge: HostBridge): HostBridgeState {
     savedTagFilter,
     setSavedTagFilter,
   ] = useState<string[] | null>(null);
+  const [graphMode, setGraphMode] = useState<GraphMode>("parsed");
 
   useEffect(() => {
     let nonce = 0;
@@ -82,6 +86,10 @@ export function useHostBridge(bridge: HostBridge): HostBridgeState {
           setSavedTagFilter(
             msg.selectedTags,
           );
+        } else if (
+          msg.type === "graphModeState"
+        ) {
+          setGraphMode(msg.mode);
         }
       });
     bridge.send({ type: "ready" });
@@ -94,5 +102,6 @@ export function useHostBridge(bridge: HostBridge): HostBridgeState {
     compiledSql,
     compiledSqlError,
     savedTagFilter,
+    graphMode,
   };
 }

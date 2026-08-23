@@ -24,11 +24,20 @@ import type { FlowGraph, Point } from "./graphToFlow.js";
 
 export interface DagGraphProps {
   graph: FlowGraph;
+
   selectedId: string | null;
-  /** Bumped by the host asking to focus a node; pans/zooms to it. */
-  focus: { nodeId: string; nonce: number } | null;
-  /** A node id to select, or null to clear the selection (e.g. clicking empty canvas). */
-  onSelectNode: (nodeId: string | null) => void;
+
+  focus: {
+    nodeId: string;
+    nonce: number;
+  } | null;
+
+  boundaryNodeIds?:
+  ReadonlySet<string>;
+
+  onSelectNode: (
+    nodeId: string | null,
+  ) => void;
 }
 
 type ModelNodeData = {
@@ -37,17 +46,40 @@ type ModelNodeData = {
   nodeType: NodeType;
   selected: boolean;
   dimmed: boolean;
+  boundary: boolean;
 };
 type ModelNode = Node<ModelNodeData, "model">;
 
 /** A model as a card: type-colored left accent, monospace name, type label. Sized by its label. */
 const ModelNode = memo(function ModelNode({ data }: NodeProps<ModelNode>) {
-  const cls = `ddag-node${data.selected ? " is-selected" : ""}${data.dimmed ? " is-dimmed" : ""}`;
+  const cls = [
+    "ddag-node",
+
+    data.selected
+      ? "is-selected"
+      : "",
+
+    data.dimmed
+      ? "is-dimmed"
+      : "",
+
+    data.boundary
+      ? "is-boundary"
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return (
     <div className={cls} style={{ ["--accent" as string]: data.color }}>
       <Handle type="target" position={Position.Left} className="ddag-node__handle" />
       <span className="ddag-node__label">{data.label}</span>
-      <span className="ddag-node__type">{data.nodeType}</span>
+      <span className="ddag-node__type">
+        {data.nodeType}
+
+        {data.boundary
+          ? " · context"
+          : ""}
+      </span>
       <Handle type="source" position={Position.Right} className="ddag-node__handle" />
     </div>
   );
@@ -115,7 +147,13 @@ export function DagGraph(props: DagGraphProps): JSX.Element {
   );
 }
 
-function DagCanvas({ graph, selectedId, focus, onSelectNode }: DagGraphProps): JSX.Element {
+function DagCanvas({
+  graph,
+  selectedId,
+  focus,
+  boundaryNodeIds,
+  onSelectNode,
+}: DagGraphProps): JSX.Element {
   // useNodesState/useEdgesState (not raw controlled props): controlled `nodes=` without an
   // onNodesChange handler renders them frozen (RF #002), even with dragging off.
   const [nodes, setNodes, onNodesChange] = useNodesState<ModelNode>([]);
@@ -152,6 +190,10 @@ function DagCanvas({ graph, selectedId, focus, onSelectNode }: DagGraphProps): J
           nodeType: n.data.nodeType,
           selected: false,
           dimmed: false,
+
+          boundary:
+            boundaryNodeIds?.has(n.id) ??
+            false,
         },
       })),
     );
@@ -164,7 +206,7 @@ function DagCanvas({ graph, selectedId, focus, onSelectNode }: DagGraphProps): J
         data: { points: e.points },
       })),
     );
-  }, [graph, setNodes, setEdges]);
+  }, [graph, boundaryNodeIds, setNodes, setEdges]);
   // Re-derive emphasis (selection ring + focus dimming) without disturbing positions.
   useEffect(() => {
     setNodes((nds) =>
@@ -185,6 +227,13 @@ function DagCanvas({ graph, selectedId, focus, onSelectNode }: DagGraphProps): J
           active
             ? "var(--vscode-focusBorder, #334155)"
             : "var(--vscode-editorWidget-border, #c3ccd6)";
+        const boundaryEdge =
+          boundaryNodeIds?.has(
+            e.source,
+          ) ||
+          boundaryNodeIds?.has(
+            e.target,
+          );
 
         return {
           ...e,
@@ -192,7 +241,14 @@ function DagCanvas({ graph, selectedId, focus, onSelectNode }: DagGraphProps): J
           style: {
             stroke: edgeColor,
             strokeWidth: active ? 2 : 1.5,
-            opacity: faded ? 0.12 : 1,
+            opacity:
+              faded
+                ? 0.12
+                : active
+                  ? 1
+                  : boundaryEdge
+                    ? 0.45
+                    : 1,
           },
 
           markerEnd: {
@@ -206,7 +262,7 @@ function DagCanvas({ graph, selectedId, focus, onSelectNode }: DagGraphProps): J
         };
       }),
     );
-  }, [selectedId, activeEdges, activeNodes, setNodes, setEdges]);
+  }, [selectedId, activeEdges, activeNodes, setNodes, setEdges, boundaryNodeIds]);
   const { setCenter } = useReactFlow();
   useEffect(() => {
     if (!focus) return;

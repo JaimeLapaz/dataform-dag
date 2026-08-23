@@ -8,8 +8,15 @@ import type { DagGraphProps } from "../src/DagGraph.js";
 // (capability gating, selection → detail panel), not the canvas. The stub exposes a select button
 // per node so we can drive selection deterministically.
 vi.mock("../src/DagGraph.js", () => ({
-  DagGraph: ({ graph, onSelectNode }: DagGraphProps) => (
+  DagGraph: ({
+    graph,
+    focus,
+    onSelectNode,
+  }: DagGraphProps) => (
     <div data-testid="canvas">
+      <span data-testid="canvas-focus">
+        {focus?.nodeId ?? ""}
+      </span>
       {graph.nodes.map((n) => (
         <button key={n.id} type="button" onClick={() => onSelectNode(n.id)}>
           {`select:${n.id}`}
@@ -550,6 +557,103 @@ describe("App", () => {
           "No matching tags",
         ),
       ).toBeInTheDocument();
+    },
+  );
+  it(
+    "navigates to a node from search",
+    async () => {
+      const bridge =
+        new MockBridge(graph);
+
+      render(
+        <App bridge={bridge} />,
+      );
+
+      await screen.findByText(
+        "2 nodes",
+      );
+
+      const search =
+        screen.getByRole(
+          "searchbox",
+          {
+            name: "Search nodes",
+          },
+        );
+
+      await userEvent.type(
+        search,
+        "mid",
+      );
+
+      const result =
+        screen.getByRole(
+          "option",
+          {
+            name: "mid",
+          },
+        );
+
+      await userEvent.click(
+        result,
+      );
+
+      expect(
+        screen.getByText(
+          "a middle node",
+        ),
+      ).toBeInTheDocument();
+
+      expect(
+        screen.getByTestId(
+          "canvas-focus",
+        ),
+      ).toHaveTextContent(
+        "mid",
+      );
+    },
+  );
+  it(
+    "shows matching nodes only",
+    async () => {
+      const bridge =
+        new MockBridge(graph);
+
+      render(
+        <App bridge={bridge} />,
+      );
+
+      await screen.findByText(
+        "2 nodes",
+      );
+
+      await userEvent.type(
+        screen.getByRole(
+          "searchbox",
+          {
+            name: "Search nodes",
+          },
+        ),
+        "mi",
+      );
+
+      expect(
+        screen.getByRole(
+          "option",
+          {
+            name: "mid",
+          },
+        ),
+      ).toBeInTheDocument();
+
+      expect(
+        screen.queryByRole(
+          "option",
+          {
+            name: "src",
+          },
+        ),
+      ).not.toBeInTheDocument();
     },
   );
 });

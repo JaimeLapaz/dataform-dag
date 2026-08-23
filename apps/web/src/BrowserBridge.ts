@@ -16,6 +16,7 @@ export class BrowserBridge implements HostBridge {
   readonly capabilities: HostCapabilities = {
     openFile: false,
     compiledSql: false,
+    compiledGraph: false,
     liveWatch: false,
     focusOnActive: false,
   };

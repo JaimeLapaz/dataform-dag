@@ -2,6 +2,10 @@ import type { SerializedGraph } from "@dataform-dag/core";
 
 export type { SerializedGraph };
 
+export type GraphMode =
+  | "parsed"
+  | "compiled";
+
 /** UI → host. Every payload carries a `type` discriminant; the protocol is host-independent. */
 export type OutboundMsg =
   | { type: "ready" }
@@ -11,6 +15,10 @@ export type OutboundMsg =
   | {
     type: "setTagFilter";
     selectedTags: string[];
+  }
+  | {
+    type: "setGraphMode";
+    mode: GraphMode;
   };
 
 export type CompilationStatus =
@@ -40,6 +48,10 @@ export type InboundMsg =
   | {
     type: "tagFilterState";
     selectedTags: string[];
+  }
+  | {
+    type: "graphModeState";
+    mode: GraphMode;
   };
 
 /**
@@ -50,6 +62,7 @@ export type InboundMsg =
 export interface HostCapabilities {
   openFile: boolean;
   compiledSql: boolean;
+  compiledGraph: boolean;
   liveWatch: boolean;
   focusOnActive: boolean;
 }

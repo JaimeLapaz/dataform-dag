@@ -22,7 +22,7 @@ export interface GraphSource {
  * exactness matters and the CLI is available.
  */
 export class ParsedGraphSource implements GraphSource {
-  constructor(private readonly source: FileSource) {}
+  constructor(private readonly source: FileSource) { }
 
   async build(): Promise<DataformGraph> {
     return buildGraphFromWorkspace(this.source);
@@ -161,31 +161,51 @@ function normalizeFilePath(filePath: string): string {
 export function findCompiledActionByFile(
   output: CompileOutput,
   filePath: string,
+  targetName?: string,
 ): CompileAction | undefined {
-  const wanted = normalizeFilePath(filePath);
+  const wanted =
+    normalizeFilePath(filePath);
 
-  // Ponemos tables primero porque una tabla puede generar
-  // assertions adicionales asociadas al mismo .sqlx.
   const actions: CompileAction[] = [
     ...(output.tables ?? []),
     ...(output.operations ?? []),
     ...(output.assertions ?? []),
   ];
 
-  return actions.find((action) => {
-    if (!action.fileName) {
-      return false;
-    }
+  const matches =
+    actions.filter((action) => {
+      if (!action.fileName) {
+        return false;
+      }
 
-    return normalizeFilePath(action.fileName) === wanted;
-  });
+      return (
+        normalizeFilePath(
+          action.fileName,
+        ) === wanted
+      );
+    });
+
+  if (targetName) {
+    const exact =
+      matches.find(
+        (action) =>
+          action.target.name ===
+          targetName,
+      );
+
+    if (exact) {
+      return exact;
+    }
+  }
+
+  return matches[0];
 }
 
 export class CompiledGraphSource implements GraphSource {
   constructor(
     private readonly root: string,
     private readonly command = "dataform",
-  ) {}
+  ) { }
 
   async build(): Promise<DataformGraph> {
     const output = await compileDataformProject(

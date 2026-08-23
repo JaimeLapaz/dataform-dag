@@ -5,7 +5,7 @@ import { BrowserBridge } from "../src/BrowserBridge.js";
 
 /** In-memory FileSource — the browser walk, replaced by a fixed set of .sqlx files. */
 class FakeSource implements FileSource {
-  constructor(private readonly files: Record<string, string>) {}
+  constructor(private readonly files: Record<string, string>) { }
   listSqlx(): Promise<string[]> {
     return Promise.resolve(Object.keys(this.files));
   }
@@ -54,9 +54,12 @@ describe("BrowserBridge", () => {
   });
 
   it("declares no host capabilities (browser can't open/watch/focus)", () => {
-    expect(new BrowserBridge(source).capabilities).toEqual({
+    expect(
+      new BrowserBridge(source).capabilities,
+    ).toEqual({
       openFile: false,
       compiledSql: false,
+      compiledGraph: false,
       liveWatch: false,
       focusOnActive: false,
     });

@@ -23,6 +23,7 @@ export class MockBridge implements HostBridge {
     this.capabilities = {
       openFile: false,
       compiledSql: false,
+      compiledGraph: false,
       liveWatch: false,
       focusOnActive: false,
       ...capabilities,

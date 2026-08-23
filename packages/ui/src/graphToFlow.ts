@@ -113,51 +113,211 @@ export function downstreamOf(index: GraphIndex, nodeId: string): string[] {
   return index.downstream.get(nodeId) ?? [];
 }
 
+export interface TagFilteredGraph {
+  graph: SerializedGraph;
+
+  matchedNodeIds: Set<string>;
+
+  boundaryNodeIds: Set<string>;
+}
+
+export function filterGraphByTagsWithBoundary(
+  graph: SerializedGraph,
+  selectedTags: string[],
+  includeBoundary: boolean,
+): TagFilteredGraph {
+  /*
+   * No active filter = full graph.
+   */
+  if (selectedTags.length === 0) {
+    return {
+      graph,
+      matchedNodeIds: new Set(
+        graph.nodes.map((node) => node.id),
+      ),
+      boundaryNodeIds: new Set(),
+    };
+  }
+
+  const byId = new Map(
+    graph.nodes.map((node) => [
+      node.id,
+      node,
+    ]),
+  );
+
+  /*
+   * Normal tag matches.
+   *
+   * The semantics remain:
+   *
+   * selectedTags ∩ node.tags !== ∅
+   */
+  const matchedNodeIds = new Set(
+    graph.nodes
+      .filter((node) =>
+        selectedTags.some((tag) =>
+          node.tags.includes(tag),
+        ),
+      )
+      .map((node) => node.id),
+  );
+
+  const visibleNodeIds =
+    new Set(matchedNodeIds);
+
+  /*
+   * Add only direct upstream/downstream
+   * neighbours.
+   */
+  if (includeBoundary) {
+    for (const nodeId of matchedNodeIds) {
+      const node = byId.get(nodeId);
+
+      if (!node) {
+        continue;
+      }
+
+      /*
+       * Direct upstream nodes.
+       */
+      for (const ref of node.refs) {
+        if (byId.has(ref)) {
+          visibleNodeIds.add(ref);
+        }
+      }
+    }
+
+    /*
+     * Direct downstream nodes.
+     */
+    for (
+      const [
+        nodeId,
+        dependents,
+      ] of graph.downstream
+    ) {
+      if (matchedNodeIds.has(nodeId)) {
+        for (
+          const dependentId
+          of dependents
+        ) {
+          if (byId.has(dependentId)) {
+            visibleNodeIds.add(
+              dependentId,
+            );
+          }
+        }
+      }
+
+      /*
+       * Also cover the reverse lookup explicitly
+       * in case downstream data is the only source
+       * available for a relationship.
+       */
+      for (
+        const dependentId
+        of dependents
+      ) {
+        if (
+          matchedNodeIds.has(
+            dependentId,
+          ) &&
+          byId.has(nodeId)
+        ) {
+          visibleNodeIds.add(nodeId);
+        }
+      }
+    }
+  }
+
+  const boundaryNodeIds =
+    new Set<string>();
+
+  for (const nodeId of visibleNodeIds) {
+    if (!matchedNodeIds.has(nodeId)) {
+      boundaryNodeIds.add(nodeId);
+    }
+  }
+
+  /*
+   * Keep only visible nodes.
+   *
+   * When context is enabled, also remove
+   * relationships between two context nodes.
+   * Every visible edge must touch at least one
+   * actual tag match.
+   */
+  const nodes = graph.nodes
+    .filter((node) =>
+      visibleNodeIds.has(node.id),
+    )
+    .map((node) => {
+      const refs = node.refs.filter(
+        (ref) =>
+          visibleNodeIds.has(ref) &&
+          (
+            !includeBoundary ||
+            matchedNodeIds.has(node.id) ||
+            matchedNodeIds.has(ref)
+          ),
+      );
+
+      return {
+        ...node,
+        refs,
+      };
+    });
+
+  /*
+   * Rebuild downstream so it stays consistent
+   * with the filtered refs above.
+   */
+  const downstreamMap =
+    new Map<string, string[]>();
+
+  for (const node of nodes) {
+    for (const upstreamId of node.refs) {
+      const dependents =
+        downstreamMap.get(
+          upstreamId,
+        ) ?? [];
+
+      dependents.push(node.id);
+
+      downstreamMap.set(
+        upstreamId,
+        dependents,
+      );
+    }
+  }
+
+  const downstream: Array<
+    [string, string[]]
+  > = [
+      ...downstreamMap.entries(),
+    ];
+
+  return {
+    graph: {
+      nodes,
+      downstream,
+    },
+
+    matchedNodeIds,
+    boundaryNodeIds,
+  };
+}
+
 export function filterGraphByTags(
   graph: SerializedGraph,
   selectedTags: string[],
 ): SerializedGraph {
-  if (selectedTags.length === 0) {
-    return graph;
-  }
-
-  const nodes = graph.nodes.filter(
-    (node) =>
-      selectedTags.some((tag) =>
-        node.tags.includes(tag),
-      ),
-  );
-
-  const visibleIds = new Set(
-    nodes.map((node) => node.id),
-  );
-
-  const downstream: Array<
-    [string, string[]]
-  > = graph.downstream
-    .filter(([nodeId]) =>
-      visibleIds.has(nodeId),
-    )
-    .map(([nodeId, dependents]) => {
-      const visibleDependents =
-        dependents.filter((dependentId) =>
-          visibleIds.has(dependentId),
-        );
-
-      return [
-        nodeId,
-        visibleDependents,
-      ] as [string, string[]];
-    })
-    .filter(
-      ([, dependents]) =>
-        dependents.length > 0,
-    );
-
-  return {
-    nodes,
-    downstream,
-  };
+  return filterGraphByTagsWithBoundary(
+    graph,
+    selectedTags,
+    false,
+  ).graph;
 }
 
 export function graphTags(

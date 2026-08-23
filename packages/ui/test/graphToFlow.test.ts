@@ -7,6 +7,7 @@ import {
   layoutGraph,
   upstreamOf,
   filterGraphByTags,
+  filterGraphByTagsWithBoundary,
   graphTags,
 } from "../src/graphToFlow.js";
 
@@ -19,6 +20,62 @@ const graph: SerializedGraph = {
   downstream: [
     ["src", ["mid"]],
     ["mid", ["leaf"]],
+  ],
+};
+
+const boundaryGraph:
+  SerializedGraph = {
+  nodes: [
+    {
+      id: "raw_source",
+      filePath:
+        "definitions/raw_source.sqlx",
+      type: "table",
+      tags: ["raw"],
+      refs: [],
+    },
+
+    {
+      id: "silver_orders",
+      filePath:
+        "definitions/silver_orders.sqlx",
+      type: "table",
+      tags: ["silver"],
+      refs: ["raw_source"],
+    },
+
+    {
+      id: "silver_clean",
+      filePath:
+        "definitions/silver_clean.sqlx",
+      type: "table",
+      tags: ["silver"],
+      refs: ["silver_orders"],
+    },
+
+    {
+      id: "gold_sales",
+      filePath:
+        "definitions/gold_sales.sqlx",
+      type: "table",
+      tags: ["gold"],
+      refs: ["silver_clean"],
+    },
+  ],
+
+  downstream: [
+    [
+      "raw_source",
+      ["silver_orders"],
+    ],
+    [
+      "silver_orders",
+      ["silver_clean"],
+    ],
+    [
+      "silver_clean",
+      ["gold_sales"],
+    ],
   ],
 };
 
@@ -202,4 +259,114 @@ describe("tag filtering", () => {
       ),
     ).toBe(taggedGraph);
   });
+  it(
+    "includes direct upstream and downstream context",
+    () => {
+      const result =
+        filterGraphByTagsWithBoundary(
+          boundaryGraph,
+          ["silver"],
+          true,
+        );
+
+      expect(
+        result.graph.nodes.map(
+          (node) => node.id,
+        ),
+      ).toEqual([
+        "raw_source",
+        "silver_orders",
+        "silver_clean",
+        "gold_sales",
+      ]);
+
+      expect(
+        [
+          ...result.boundaryNodeIds,
+        ],
+      ).toEqual([
+        "raw_source",
+        "gold_sales",
+      ]);
+
+      expect(
+        [
+          ...result.matchedNodeIds,
+        ],
+      ).toEqual([
+        "silver_orders",
+        "silver_clean",
+      ]);
+    },
+  );
+  it(
+    "does not include transitive boundary nodes",
+    () => {
+      const graph:
+        SerializedGraph = {
+        nodes: [
+          {
+            id: "raw_root",
+            filePath:
+              "definitions/raw_root.sqlx",
+            type: "table",
+            tags: ["raw"],
+            refs: [],
+          },
+
+          {
+            id: "raw_source",
+            filePath:
+              "definitions/raw_source.sqlx",
+            type: "table",
+            tags: ["raw"],
+            refs: ["raw_root"],
+          },
+
+          {
+            id: "silver_orders",
+            filePath:
+              "definitions/silver_orders.sqlx",
+            type: "table",
+            tags: ["silver"],
+            refs: ["raw_source"],
+          },
+        ],
+
+        downstream: [
+          [
+            "raw_root",
+            ["raw_source"],
+          ],
+          [
+            "raw_source",
+            ["silver_orders"],
+          ],
+        ],
+      };
+
+      const result =
+        filterGraphByTagsWithBoundary(
+          graph,
+          ["silver"],
+          true,
+        );
+
+      expect(
+        result.graph.nodes.map(
+          (node) => node.id,
+        ),
+      ).toEqual([
+        "raw_source",
+        "silver_orders",
+      ]);
+
+      expect(
+        result.graph.nodes.some(
+          (node) =>
+            node.id === "raw_root",
+        ),
+      ).toBe(false);
+    },
+  );
 });
