@@ -694,6 +694,7 @@ class GraphController implements vscode.Disposable {
         findCompiledActionByFile(
           output,
           relativeFile,
+          nodeId,
         );
 
       if (!action) {

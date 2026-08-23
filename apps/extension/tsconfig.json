@@ -9,5 +9,5 @@
     "noEmit": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["src", "webview", "build.mjs"]
+  "include": ["src", "webview", "test", "build.mjs"]
 }

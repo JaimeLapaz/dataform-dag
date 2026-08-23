@@ -392,9 +392,28 @@ describe("message routing", () => {
     activateAndShow();
     lastPanel().webview.emitMessage({ type: "openFile", filePath: "/proj/a.sqlx" });
     expect(window.showTextDocument).toHaveBeenCalledTimes(1);
-    const { uri, opts } = records.shownDocs[0];
-    expect(uri.fsPath).toBe("/proj/a.sqlx");
-    expect(opts).toEqual({ viewColumn: ViewColumn.One, preview: false });
+    const shownDoc =
+      records.shownDocs[0];
+
+    if (!shownDoc) {
+      throw new Error(
+        "Expected a document to be shown",
+      );
+    }
+
+    const {
+      uri,
+      opts,
+    } = shownDoc;
+
+    expect(uri.fsPath).toBe(
+      "/proj/a.sqlx",
+    );
+
+    expect(opts).toEqual({
+      viewColumn: ViewColumn.One,
+      preview: false,
+    });
   });
 
   it(
@@ -487,6 +506,40 @@ describe("message routing", () => {
           nodeId: "customers",
           sql: expectedSql,
         }),
+      );
+    },
+  );
+  it(
+    "uses the node id to disambiguate compiled actions sharing a file",
+    async () => {
+      findCompiledActionMock.mockReturnValue({
+        target: {
+          name: "customers_assertion",
+        },
+        fileName:
+          "definitions/customers.sqlx",
+        query:
+          "SELECT 1",
+      });
+
+      activateAndShow();
+
+      lastPanel().webview.emitMessage({
+        type: "showCompiledSql",
+        nodeId:
+          "customers_assertion",
+        filePath:
+          "/proj/definitions/customers.sqlx",
+      });
+
+      await vi.waitFor(() =>
+        expect(
+          findCompiledActionMock,
+        ).toHaveBeenCalledWith(
+          expect.any(Object),
+          "definitions/customers.sqlx",
+          "customers_assertion",
+        ),
       );
     },
   );
@@ -898,7 +951,11 @@ describe("buildAndPost", () => {
     activateAndShow();
     lastPanel().webview.emitMessage({ type: "ready" });
     await vi.waitFor(() => expect(buildMock).toHaveBeenCalledTimes(1));
-    expect(buildMock.mock.calls[0][0]).toMatchObject({ root: "/proj" });
+    expect(
+      buildMock.mock.calls[0]?.[0],
+    ).toMatchObject({
+      root: "/proj",
+    });
   });
 });
 
