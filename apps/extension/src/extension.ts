@@ -23,16 +23,31 @@ import type {
 
 const COMPILATION_WARMUP_DELAY_MS = 300;
 
+const EXTENSION_LABEL =
+  "Dataform DAG Explorer";
+
+const COMMAND_SHOW_GRAPH =
+  "dataformDagExplorer.showGraph";
+
+const COMMAND_SHOW_COMPILED_SQL =
+  "dataformDagExplorer.showCompiledSql";
+
+const WEBVIEW_TYPE =
+  "dataformDagExplorer";
+
+const TAG_FILTER_STATE_KEY =
+  "dataformDagExplorer.selectedTags";
+
 export function activate(context: vscode.ExtensionContext): void {
   const controller = new GraphController(context);
   context.subscriptions.push(
     vscode.commands.registerCommand(
-      "dataformDag.showGraph",
+      COMMAND_SHOW_GRAPH,
       () => controller.show(),
     ),
 
     vscode.commands.registerCommand(
-      "dataformDag.showCompiledSql",
+      COMMAND_SHOW_COMPILED_SQL,
       () => controller.showCompiledSql(),
     ),
 
@@ -174,7 +189,7 @@ class GraphController implements vscode.Disposable {
       this.context.workspaceState.get<
         unknown
       >(
-        "dataformDag.selectedTags",
+        TAG_FILTER_STATE_KEY,
       );
 
     if (!Array.isArray(saved)) {
@@ -195,7 +210,7 @@ class GraphController implements vscode.Disposable {
     ];
 
     void this.context.workspaceState.update(
-      "dataformDag.selectedTags",
+      TAG_FILTER_STATE_KEY,
       this.selectedTags,
     );
   }
@@ -213,7 +228,7 @@ class GraphController implements vscode.Disposable {
 
     if (!editor) {
       vscode.window.showWarningMessage(
-        "Dataform DAG: open a .sqlx file first.",
+        "Dataform DAG Explorer: open a .sqlx file first.",
       );
       return;
     }
@@ -228,7 +243,7 @@ class GraphController implements vscode.Disposable {
   ): Promise<void> {
     if (!sourceFile.toLowerCase().endsWith(".sqlx")) {
       vscode.window.showWarningMessage(
-        "Dataform DAG: the selected file is not a .sqlx file.",
+        "Dataform DAG Explorer: the selected file is not a .sqlx file.",
       );
       return;
     }
@@ -244,7 +259,7 @@ class GraphController implements vscode.Disposable {
 
     if (!root) {
       vscode.window.showWarningMessage(
-        "Dataform DAG: open a Dataform project first.",
+        "Dataform DAG Explorer: open a Dataform project first.",
       );
       return;
     }
@@ -265,7 +280,7 @@ class GraphController implements vscode.Disposable {
 
       if (!action) {
         vscode.window.showWarningMessage(
-          `Dataform DAG: no compiled action found for ${relativeFile}.`,
+          `Dataform DAG Explorer: no compiled action found for ${relativeFile}.`,
         );
         return;
       }
@@ -275,7 +290,7 @@ class GraphController implements vscode.Disposable {
 
       if (!sql) {
         vscode.window.showWarningMessage(
-          `Dataform DAG: no compiled SQL found for ${relativeFile}.`,
+          `Dataform DAG Explorer: no compiled SQL found for ${relativeFile}.`,
         );
         return;
       }
@@ -295,7 +310,7 @@ class GraphController implements vscode.Disposable {
       );
     } catch (error) {
       vscode.window.showErrorMessage(
-        `Dataform DAG: could not generate SQL — ${formatError(error)}`,
+        `Dataform DAG Explorer: could not generate SQL — ${formatError(error)}`,
       );
     }
   }
@@ -306,8 +321,8 @@ class GraphController implements vscode.Disposable {
       return;
     }
     const panel = vscode.window.createWebviewPanel(
-      "dataformDag",
-      "Dataform DAG",
+      WEBVIEW_TYPE,
+      EXTENSION_LABEL,
       vscode.ViewColumn.Active,
       {
         enableScripts: true,
@@ -791,7 +806,7 @@ class GraphController implements vscode.Disposable {
 
     if (!root) {
       vscode.window.showWarningMessage(
-        "Dataform DAG: open a folder to view its .sqlx graph.",
+        "Dataform DAG Explorer: open a folder to view its .sqlx graph.",
       );
 
       return;
@@ -849,7 +864,7 @@ class GraphController implements vscode.Disposable {
       );
     } catch (err) {
       vscode.window.showErrorMessage(
-        `Dataform DAG: could not build the graph — ${formatError(err)}`,
+        `Dataform DAG Explorer: could not build the graph — ${formatError(err)}`,
       );
     }
   }
@@ -888,7 +903,7 @@ class GraphController implements vscode.Disposable {
           <meta name="viewport" content="width=device-width, initial-scale=1.0" />
           <meta http-equiv="Content-Security-Policy" content="${csp}" />
           <link href="${styleUri}" rel="stylesheet" />
-          <title>Dataform DAG</title>
+          <title>Dataform DAG Explorer</title>
         </head>
         <body>
           <div id="root"></div>

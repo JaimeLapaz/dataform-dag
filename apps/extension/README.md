@@ -1,4 +1,13 @@
-## 🔀 dataform-dag for VS Code
+# Dataform DAG Explorer for VS Code
+
+> Dataform DAG Explorer is an unofficial community extension.
+> It is not affiliated with or endorsed by Google.
+>
+> This project is based on the MIT-licensed
+> [dataform-dag](https://github.com/cadamsmith/dataform-dag)
+> project by cadamsmith and includes substantial additional
+> functionality for compiled graphs, compiled SQL preview,
+> filtering, navigation and diagnostics.
 
 Explore a local [Dataform](https://cloud.google.com/dataform) project's dependency graph directly inside VS Code.
 
@@ -216,7 +225,7 @@ Cmd+Shift+P
 Run:
 
 ```text
-Dataform DAG: Show Graph
+Dataform DAG Explorer: Show Graph
 ```
 
 ## Requirements
@@ -306,11 +315,11 @@ Use Compiled mode when you need Dataform's resolved graph.
 
 ## Commands
 
-### Dataform DAG: Show Graph
+### Dataform DAG Explorer: Show Graph
 
 Opens or reveals the DAG panel.
 
-### Dataform DAG: Show Compiled SQL
+### Dataform DAG Explorer: Show Compiled SQL
 
 Compiles the active `.sqlx` action locally and opens its compiled SQL using the extension command workflow.
 

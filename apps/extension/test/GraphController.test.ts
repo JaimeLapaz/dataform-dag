@@ -136,7 +136,7 @@ function fakeContext(
 function activateAndShow() {
   const context = fakeContext();
   activate(context as never);
-  const showGraph = records.commands.get("dataformDag.showGraph")!;
+  const showGraph = records.commands.get("dataformDagExplorer.showGraph")!;
   showGraph();
   return context;
 }
@@ -206,12 +206,12 @@ describe("activate", () => {
     const context = activateAndShow();
 
     expect(commands.registerCommand).toHaveBeenCalledWith(
-      "dataformDag.showGraph",
+      "dataformDagExplorer.showGraph",
       expect.any(Function),
     );
 
     expect(commands.registerCommand).toHaveBeenCalledWith(
-      "dataformDag.showCompiledSql",
+      "dataformDagExplorer.showCompiledSql",
       expect.any(Function),
     );
 
@@ -230,7 +230,7 @@ describe("show", () => {
   it("reveals the existing panel instead of creating a second one", () => {
     const context = fakeContext();
     activate(context as never);
-    const showGraph = records.commands.get("dataformDag.showGraph")!;
+    const showGraph = records.commands.get("dataformDagExplorer.showGraph")!;
     showGraph();
     showGraph();
     expect(window.createWebviewPanel).toHaveBeenCalledTimes(1);
@@ -796,7 +796,7 @@ describe("message routing", () => {
     "restores the saved tag filter on ready",
     async () => {
       const context = fakeContext({
-        "dataformDag.selectedTags": [
+        "dataformDagExplorer.selectedTags": [
           "silver",
           "gold",
         ],
@@ -806,7 +806,7 @@ describe("message routing", () => {
 
       const showGraph =
         records.commands.get(
-          "dataformDag.showGraph",
+          "dataformDagExplorer.showGraph",
         )!;
 
       showGraph();
@@ -837,7 +837,7 @@ describe("message routing", () => {
 
       const showGraph =
         records.commands.get(
-          "dataformDag.showGraph",
+          "dataformDagExplorer.showGraph",
         )!;
 
       showGraph();
@@ -854,7 +854,7 @@ describe("message routing", () => {
         expect(
           context.workspaceState.update,
         ).toHaveBeenCalledWith(
-          "dataformDag.selectedTags",
+          "dataformDagExplorer.selectedTags",
           ["silver", "gold"],
         ),
       );
@@ -1138,7 +1138,7 @@ describe("dispose", () => {
     }
 
     records.commands
-      .get("dataformDag.showGraph")!();
+      .get("dataformDagExplorer.showGraph")!();
 
     expect(
       window.createWebviewPanel,
