@@ -1,5 +1,6 @@
 export { App, type AppProps } from "./App.js";
 export {
+  type GraphMode,
   type HostBridge,
   type HostCapabilities,
   type InboundMsg,

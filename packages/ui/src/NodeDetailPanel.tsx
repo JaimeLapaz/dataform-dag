@@ -1,13 +1,31 @@
 import type { DataformNode } from "@dataform-dag/core";
 import { NODE_COLORS } from "./graphToFlow.js";
+import type {
+  CompilationStatus,
+} from "./HostBridge.js";
+import { useEffect, useState } from "react";
 
 export interface NodeDetailPanelProps {
   node: DataformNode;
   upstream: string[];
   downstream: string[];
-  /** Present only when the host advertises `openFile`; rendering is gated on it. */
-  onOpenFile?: (node: DataformNode) => void;
-  onSelect: (nodeId: string) => void;
+
+  onOpenFile?: (
+    node: DataformNode,
+  ) => void;
+
+  onShowCompiledSql?: (
+    node: DataformNode,
+  ) => void;
+
+  compilationStatus?: CompilationStatus;
+
+  compiledSql?: string;
+  compiledSqlError?: string;
+
+  onSelect: (
+    nodeId: string,
+  ) => void;
 }
 
 /** Type, tags, description, direct upstream/downstream, and a capability-gated "Go to file". */
@@ -16,10 +34,61 @@ export function NodeDetailPanel({
   upstream,
   downstream,
   onOpenFile,
+  onShowCompiledSql,
+  compilationStatus,
+  compiledSql,
+  compiledSqlError,
   onSelect,
 }: NodeDetailPanelProps): JSX.Element {
+  const [sqlVisible, setSqlVisible] =
+    useState(false);
+
+  const [copied, setCopied] =
+    useState(false);
+
+  useEffect(() => {
+    setSqlVisible(false);
+    setCopied(false);
+  }, [node.id]);
+
+  const showCompiledSql = (): void => {
+    setSqlVisible(true);
+    setCopied(false);
+
+    onShowCompiledSql?.(node);
+  };
+
+  const hideCompiledSql = (): void => {
+    setSqlVisible(false);
+    setCopied(false);
+  };
+
+  const copyCompiledSql = async (): Promise<void> => {
+    if (!compiledSql) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(
+        compiledSql,
+      );
+
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
   return (
-    <aside className="ddag-detail">
+    <aside
+      className={[
+        "ddag-detail",
+        sqlVisible
+          ? "ddag-detail--sql-open"
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
       <header className="ddag-detail__head">
         <span className="ddag-badge" style={{ background: NODE_COLORS[node.type] }}>
           {node.type}
@@ -38,11 +107,96 @@ export function NodeDetailPanel({
       {node.description && <p className="ddag-detail__desc">{node.description}</p>}
       <NeighborList title="Upstream (depends on)" ids={upstream} onSelect={onSelect} />
       <NeighborList title="Downstream (dependents)" ids={downstream} onSelect={onSelect} />
-      {onOpenFile && (
-        <button type="button" className="ddag-btn" onClick={() => onOpenFile(node)}>
-          Go to file
-        </button>
+      {(onOpenFile || onShowCompiledSql) && (
+        <div className="ddag-detail__actions">
+          {onOpenFile && (
+            <button
+              type="button"
+              className="ddag-btn"
+              onClick={() => onOpenFile(node)}
+            >
+              Go to file
+            </button>
+          )}
+
+          {onShowCompiledSql && (
+            <button
+              type="button"
+              className="ddag-btn"
+              onClick={showCompiledSql}
+            >
+              Compiled SQL
+            </button>
+          )}
+
+          {onShowCompiledSql &&
+            compilationStatus &&
+            compilationStatus !== "idle" && (
+              <span
+                className={[
+                  "ddag-compilation-status",
+                  `ddag-compilation-status--${compilationStatus}`,
+                ].join(" ")}
+                role="status"
+                aria-live="polite"
+              >
+                {compilationStatus ===
+                  "compiling" &&
+                  "Compiling…"}
+
+                {compilationStatus ===
+                  "ready" &&
+                  "✓ Compiled"}
+
+                {compilationStatus ===
+                  "error" &&
+                  "Compilation failed"}
+              </span>
+            )}
+        </div>
       )}
+      {sqlVisible &&
+        (compiledSql || compiledSqlError) && (
+          <section className="ddag-sql-preview">
+            <div className="ddag-sql-preview__header">
+              <h3 className="ddag-sql-preview__title">
+                Compiled SQL
+              </h3>
+
+              <div className="ddag-sql-preview__actions">
+                {compiledSql && (
+                  <button
+                    type="button"
+                    className="ddag-sql-preview__action"
+                    onClick={() => {
+                      void copyCompiledSql();
+                    }}
+                  >
+                    {copied ? "✓ Copied" : "Copy"}
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  className="ddag-sql-preview__action"
+                  onClick={hideCompiledSql}
+                >
+                  Hide
+                </button>
+              </div>
+            </div>
+
+            {compiledSqlError ? (
+              <div className="ddag-sql-preview__error">
+                {compiledSqlError}
+              </div>
+            ) : (
+              <pre className="ddag-sql-preview__code">
+                <code>{compiledSql}</code>
+              </pre>
+            )}
+          </section>
+        )}
     </aside>
   );
 }

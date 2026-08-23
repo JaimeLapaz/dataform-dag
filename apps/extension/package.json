@@ -1,44 +1,65 @@
 {
-  "name": "dataform-dag",
-  "displayName": "Dataform DAG",
+  "name": "dataform-dag-explorer",
+  "displayName": "Dataform DAG Explorer",
   "version": "0.1.0",
   "private": true,
-  "description": "Interactive DAG viewer for a Dataform project's .sqlx dependency graph — parsed locally, no cloud.",
-  "publisher": "cadamsmith",
-  "license": "MIT",
+  "description": "Explore Dataform dependency graphs with parsed and compiled modes, local compiled SQL preview, tag filtering, search and diagnostics.",
+  "publisher": "jaimelapaz",
+  "license": "SEE LICENSE IN LICENSE",
   "icon": "icon.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/cadamsmith/dataform-dag.git",
+    "url": "https://github.com/JaimeLapaz/dataform-dag.git",
     "directory": "apps/extension"
   },
   "bugs": {
-    "url": "https://github.com/cadamsmith/dataform-dag/issues"
+    "url": "https://github.com/JaimeLapaz/dataform-dag/issues"
   },
-  "homepage": "https://github.com/cadamsmith/dataform-dag#readme",
+  "homepage": "https://github.com/JaimeLapaz/dataform-dag#readme",
   "keywords": [
     "dataform",
     "dag",
     "sqlx",
     "dependency graph",
+    "lineage",
+    "compiled sql",
+    "bigquery",
     "data engineering"
   ],
   "galleryBanner": {
     "color": "#111827",
     "theme": "dark"
   },
+  "pricing": "Free",
   "engines": {
     "vscode": "^1.90.0"
   },
-  "categories": ["Visualization", "Other"],
+  "extensionKind": [
+    "workspace"
+  ],
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
   "main": "./dist/extension.js",
   "activationEvents": [],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Dataform DAG Explorer reads project files and can run local Dataform compilation, which may evaluate project JavaScript."
+    }
+  },
   "contributes": {
     "commands": [
       {
-        "command": "dataformDag.showGraph",
+        "command": "dataformDagExplorer.showGraph",
         "title": "Show Graph",
-        "category": "Dataform DAG"
+        "category": "Dataform DAG Explorer"
+      },
+      {
+        "command": "dataformDagExplorer.showCompiledSql",
+        "title": "Show Compiled SQL",
+        "category": "Dataform DAG Explorer"
       }
     ]
   },
@@ -57,6 +78,7 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@types/node": "^22.10.0",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "@types/vscode": "^1.90.0",

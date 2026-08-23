@@ -127,10 +127,51 @@ export const records: Records = {
 };
 
 /** Convenience accessors for the most-recently created objects. */
-export const lastPanel = (): MockPanel => records.panels[records.panels.length - 1];
-export const lastWatcher = (): MockWatcher => records.watchers[records.watchers.length - 1];
-export const lastActiveEditorHandler = (): ((editor: unknown) => void) =>
-  records.activeEditorHandlers[records.activeEditorHandlers.length - 1];
+export const lastPanel =
+  (): MockPanel => {
+    const panel =
+      records.panels.at(-1);
+
+    if (!panel) {
+      throw new Error(
+        "No mock panel has been created",
+      );
+    }
+
+    return panel;
+  };
+
+export const lastWatcher =
+  (): MockWatcher => {
+    const watcher =
+      records.watchers.at(-1);
+
+    if (!watcher) {
+      throw new Error(
+        "No mock watcher has been created",
+      );
+    }
+
+    return watcher;
+  };
+
+export const lastActiveEditorHandler =
+  (): (
+    (editor: unknown) => void
+  ) => {
+    const handler =
+      records.activeEditorHandlers.at(
+        -1,
+      );
+
+    if (!handler) {
+      throw new Error(
+        "No active editor handler has been registered",
+      );
+    }
+
+    return handler;
+  };
 
 /** Reset all recorded state between tests. `workspaceFolders` is mutated directly by tests. */
 export function resetMock(): void {
@@ -178,15 +219,39 @@ export const commands = {
 
 export const workspace: {
   workspaceFolders: WorkspaceFolder[] | undefined;
-  createFileSystemWatcher: (glob: string) => MockWatcher;
+
+  getWorkspaceFolder: (
+    uri: { fsPath: string },
+  ) => WorkspaceFolder | undefined;
+
+  createFileSystemWatcher: (
+    glob: string,
+  ) => MockWatcher;
 } = {
   workspaceFolders: undefined,
-  createFileSystemWatcher: vi.fn((glob: string) => {
-    const w = new MockWatcher();
-    w.glob = glob;
-    records.watchers.push(w);
-    return w;
-  }),
+
+  getWorkspaceFolder: vi.fn(
+    (uri: { fsPath: string }) => {
+      return workspace.workspaceFolders?.find(
+        (folder) =>
+          uri.fsPath.startsWith(
+            folder.uri.fsPath,
+          ),
+      );
+    },
+  ),
+
+  createFileSystemWatcher: vi.fn(
+    (glob: string) => {
+      const w = new MockWatcher();
+
+      w.glob = glob;
+
+      records.watchers.push(w);
+
+      return w;
+    },
+  ),
 };
 
 export const Uri = {

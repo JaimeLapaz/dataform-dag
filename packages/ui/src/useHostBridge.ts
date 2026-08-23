@@ -1,10 +1,34 @@
 import { useEffect, useState } from "react";
-import type { HostBridge, SerializedGraph } from "./HostBridge.js";
+import type {
+  CompilationStatus,
+  GraphMode,
+  HostBridge,
+  SerializedGraph,
+} from "./HostBridge.js";
 
 export interface HostBridgeState {
   graph: SerializedGraph | null;
-  /** The node the host last asked to focus (e.g. active editor changed). Cleared after consumption. */
-  focusRequest: { nodeId: string; nonce: number } | null;
+
+  focusRequest: {
+    nodeId: string;
+    nonce: number;
+  } | null;
+
+  compilationStatus: CompilationStatus;
+
+  graphMode: GraphMode;
+
+  compiledSql: {
+    nodeId: string;
+    sql: string;
+  } | null;
+
+  compiledSqlError: {
+    nodeId: string;
+    message: string;
+  } | null;
+
+  savedTagFilter: string[] | null;
 }
 
 /**
@@ -15,14 +39,69 @@ export interface HostBridgeState {
 export function useHostBridge(bridge: HostBridge): HostBridgeState {
   const [graph, setGraph] = useState<SerializedGraph | null>(null);
   const [focusRequest, setFocusRequest] = useState<HostBridgeState["focusRequest"]>(null);
+  const [compilationStatus, setCompilationStatus] = useState<CompilationStatus>("idle");
+  const [compiledSql, setCompiledSql] = useState<HostBridgeState["compiledSql"]>(null);
+  const [compiledSqlError, setCompiledSqlError] = useState<HostBridgeState["compiledSqlError"]>(null);
+  const [
+    savedTagFilter,
+    setSavedTagFilter,
+  ] = useState<string[] | null>(null);
+  const [graphMode, setGraphMode] = useState<GraphMode>("parsed");
+
   useEffect(() => {
     let nonce = 0;
-    const unsubscribe = bridge.onMessage((msg) => {
-      if (msg.type === "graphUpdate") setGraph(msg.graph);
-      else if (msg.type === "focusNode") setFocusRequest({ nodeId: msg.nodeId, nonce: ++nonce });
-    });
+    const unsubscribe =
+      bridge.onMessage((msg) => {
+        if (msg.type === "graphUpdate") {
+          setGraph(msg.graph);
+        } else if (msg.type === "focusNode") {
+          setFocusRequest({
+            nodeId: msg.nodeId,
+            nonce: ++nonce,
+          });
+        } else if (
+          msg.type === "compilationStatus"
+        ) {
+          setCompilationStatus(msg.status);
+
+          if (
+            msg.status === "idle" ||
+            msg.status === "compiling"
+          ) {
+            setCompiledSql(null);
+            setCompiledSqlError(null);
+          }
+        } else if (msg.type === "compiledSqlResult") {
+          setCompiledSql({
+            nodeId: msg.nodeId,
+            sql: msg.sql,
+          });
+          setCompiledSqlError(null);
+        } else if (msg.type === "compiledSqlError") {
+          setCompiledSqlError({
+            nodeId: msg.nodeId,
+            message: msg.message,
+          });
+        } else if (msg.type === "tagFilterState") {
+          setSavedTagFilter(
+            msg.selectedTags,
+          );
+        } else if (
+          msg.type === "graphModeState"
+        ) {
+          setGraphMode(msg.mode);
+        }
+      });
     bridge.send({ type: "ready" });
     return unsubscribe;
   }, [bridge]);
-  return { graph, focusRequest };
+  return {
+    graph,
+    focusRequest,
+    compilationStatus,
+    compiledSql,
+    compiledSqlError,
+    savedTagFilter,
+    graphMode,
+  };
 }

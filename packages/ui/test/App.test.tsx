@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { SerializedGraph } from "@dataform-dag/core";
 import type { DagGraphProps } from "../src/DagGraph.js";
@@ -8,8 +8,15 @@ import type { DagGraphProps } from "../src/DagGraph.js";
 // (capability gating, selection → detail panel), not the canvas. The stub exposes a select button
 // per node so we can drive selection deterministically.
 vi.mock("../src/DagGraph.js", () => ({
-  DagGraph: ({ graph, onSelectNode }: DagGraphProps) => (
+  DagGraph: ({
+    graph,
+    focus,
+    onSelectNode,
+  }: DagGraphProps) => (
     <div data-testid="canvas">
+      <span data-testid="canvas-focus">
+        {focus?.nodeId ?? ""}
+      </span>
       {graph.nodes.map((n) => (
         <button key={n.id} type="button" onClick={() => onSelectNode(n.id)}>
           {`select:${n.id}`}
@@ -31,6 +38,81 @@ const graph: SerializedGraph = {
     { id: "mid", filePath: "def/mid.sqlx", type: "table", tags: ["core"], refs: ["src"], description: "a middle node" },
   ],
   downstream: [["src", ["mid"]]],
+};
+
+const taggedGraph: SerializedGraph = {
+  nodes: [
+    {
+      id: "raw_orders",
+      filePath: "def/raw_orders.sqlx",
+      type: "table",
+      tags: ["raw", "orders"],
+      refs: [],
+    },
+    {
+      id: "silver_orders",
+      filePath:
+        "def/silver_orders.sqlx",
+      type: "table",
+      tags: ["silver", "orders"],
+      refs: [],
+    },
+    {
+      id: "gold_orders",
+      filePath:
+        "def/gold_orders.sqlx",
+      type: "table",
+      tags: ["gold", "orders"],
+      refs: [],
+    },
+    {
+      id: "gold_sales",
+      filePath:
+        "def/gold_sales.sqlx",
+      type: "table",
+      tags: ["gold", "sales"],
+      refs: [],
+    },
+    {
+      id: "finance_report",
+      filePath:
+        "def/finance_report.sqlx",
+      type: "table",
+      tags: ["finance"],
+      refs: [],
+    },
+  ],
+
+  downstream: [],
+};
+
+const graphWithIssues:
+  SerializedGraph = {
+  nodes: [
+    {
+      id: "silver_orders",
+      filePath:
+        "def/silver_orders.sqlx",
+      type: "table",
+      tags: ["silver"],
+      refs: ["raw_orders"],
+    },
+  ],
+
+  downstream: [],
+
+  issues: [
+    {
+      kind:
+        "unresolved-reference",
+      nodeId:
+        "silver_orders",
+      filePath:
+        "def/silver_orders.sqlx",
+      reference:
+        "raw_orders",
+    },
+  ],
 };
 
 describe("App", () => {
@@ -81,4 +163,589 @@ describe("App", () => {
     await userEvent.click(await screen.findByRole("button", { name: "select:mid" }));
     expect(screen.queryByRole("button", { name: "Go to file" })).not.toBeInTheDocument();
   });
+  it(
+    "shows compilation status for hosts that support compiled SQL",
+    async () => {
+      const bridge = new MockBridge(
+        graph,
+        {
+          compiledSql: true,
+        },
+      );
+
+      render(
+        <App bridge={bridge} />,
+      );
+
+      await userEvent.click(
+        await screen.findByRole(
+          "button",
+          {
+            name: "select:mid",
+          },
+        ),
+      );
+
+      act(() => {
+        bridge.emit({
+          type: "compilationStatus",
+          status: "compiling",
+        });
+      });
+
+      expect(
+        await screen.findByText(
+          "Compiling…",
+        ),
+      ).toBeInTheDocument();
+
+      act(() => {
+        bridge.emit({
+          type: "compilationStatus",
+          status: "ready",
+        });
+      });
+
+      expect(
+        await screen.findByText(
+          "✓ Compiled",
+        ),
+      ).toBeInTheDocument();
+
+      expect(
+        screen.queryByText(
+          "Compiling…",
+        ),
+      ).not.toBeInTheDocument();
+    },
+  );
+  it(
+    "persists selected tag filters",
+    async () => {
+      const taggedGraph: SerializedGraph = {
+        nodes: [
+          {
+            id: "silver",
+            filePath:
+              "def/silver.sqlx",
+            type: "table",
+            tags: ["silver"],
+            refs: [],
+          },
+          {
+            id: "gold",
+            filePath:
+              "def/gold.sqlx",
+            type: "table",
+            tags: ["gold"],
+            refs: [],
+          },
+          {
+            id: "raw",
+            filePath:
+              "def/raw.sqlx",
+            type: "table",
+            tags: ["raw"],
+            refs: [],
+          },
+        ],
+        downstream: [],
+      };
+
+      const bridge =
+        new MockBridge(
+          taggedGraph,
+        );
+
+      render(
+        <App bridge={bridge} />,
+      );
+
+      const silver =
+        await screen.findByRole(
+          "checkbox",
+          {
+            name: "silver",
+          },
+        );
+
+      await userEvent.click(
+        silver,
+      );
+
+      expect(
+        bridge.sent,
+      ).toContainEqual({
+        type: "setTagFilter",
+        selectedTags: [
+          "silver",
+        ],
+      });
+
+      expect(
+        await screen.findByText(
+          "1 / 3 nodes",
+        ),
+      ).toBeInTheDocument();
+    },
+  );
+  it(
+    "searches available tags in the tag dropdown",
+    async () => {
+      const bridge =
+        new MockBridge(taggedGraph);
+
+      render(
+        <App bridge={bridge} />,
+      );
+
+      await screen.findByText(
+        "5 nodes",
+      );
+
+      const tagsLabel =
+        screen.getByText("Tags");
+
+      const summary =
+        tagsLabel.closest("summary");
+
+      expect(summary).not.toBeNull();
+
+      await userEvent.click(summary!);
+
+      const search =
+        screen.getByPlaceholderText(
+          "Search tags...",
+        );
+
+      await userEvent.type(
+        search,
+        "sil",
+      );
+
+      expect(
+        screen.getByRole(
+          "checkbox",
+          {
+            name: "silver",
+          },
+        ),
+      ).toBeInTheDocument();
+
+      expect(
+        screen.queryByRole(
+          "checkbox",
+          {
+            name: "gold",
+          },
+        ),
+      ).not.toBeInTheDocument();
+
+      expect(
+        screen.queryByRole(
+          "checkbox",
+          {
+            name: "orders",
+          },
+        ),
+      ).not.toBeInTheDocument();
+    },
+  );
+  it(
+    "filters by multiple selected tags",
+    async () => {
+      const bridge =
+        new MockBridge(taggedGraph);
+
+      render(
+        <App bridge={bridge} />,
+      );
+
+      await screen.findByText(
+        "5 nodes",
+      );
+
+      const summary =
+        screen
+          .getByText("Tags")
+          .closest("summary");
+
+      expect(summary).not.toBeNull();
+
+      await userEvent.click(summary!);
+
+      await userEvent.click(
+        screen.getByRole(
+          "checkbox",
+          {
+            name: "silver",
+          },
+        ),
+      );
+
+      expect(
+        await screen.findByText(
+          "1 / 5 nodes",
+        ),
+      ).toBeInTheDocument();
+
+      await userEvent.click(
+        screen.getByRole(
+          "checkbox",
+          {
+            name: "gold",
+          },
+        ),
+      );
+
+      expect(
+        await screen.findByText(
+          "3 / 5 nodes",
+        ),
+      ).toBeInTheDocument();
+
+      expect(
+        bridge.sent,
+      ).toContainEqual({
+        type: "setTagFilter",
+        selectedTags: [
+          "silver",
+          "gold",
+        ],
+      });
+    },
+  );
+  it(
+    "clears all selected tags",
+    async () => {
+      const bridge =
+        new MockBridge(taggedGraph);
+
+      render(
+        <App bridge={bridge} />,
+      );
+
+      await screen.findByText(
+        "5 nodes",
+      );
+
+      const summary =
+        screen
+          .getByText("Tags")
+          .closest("summary");
+
+      expect(summary).not.toBeNull();
+
+      await userEvent.click(summary!);
+
+      await userEvent.click(
+        screen.getByRole(
+          "checkbox",
+          {
+            name: "silver",
+          },
+        ),
+      );
+
+      await userEvent.click(
+        screen.getByRole(
+          "checkbox",
+          {
+            name: "gold",
+          },
+        ),
+      );
+
+      expect(
+        await screen.findByText(
+          "3 / 5 nodes",
+        ),
+      ).toBeInTheDocument();
+
+      await userEvent.click(
+        screen.getByRole(
+          "button",
+          {
+            name: "Clear all",
+          },
+        ),
+      );
+
+      expect(
+        await screen.findByText(
+          "5 nodes",
+        ),
+      ).toBeInTheDocument();
+
+      expect(
+        bridge.sent,
+      ).toContainEqual({
+        type: "setTagFilter",
+        selectedTags: [],
+      });
+    },
+  );
+  it(
+    "restores persisted tag filters on mount",
+    async () => {
+      const bridge =
+        new MockBridge(
+          taggedGraph,
+          {},
+          [
+            "silver",
+            "gold",
+          ],
+        );
+
+      render(
+        <App bridge={bridge} />,
+      );
+
+      expect(
+        await screen.findByText(
+          "3 / 5 nodes",
+        ),
+      ).toBeInTheDocument();
+
+      expect(
+        screen.getByText(
+          "silver, gold",
+        ),
+      ).toBeInTheDocument();
+
+      const summary =
+        screen
+          .getByText("Tags")
+          .closest("summary");
+
+      expect(summary).not.toBeNull();
+
+      await userEvent.click(summary!);
+
+      expect(
+        screen.getByRole(
+          "checkbox",
+          {
+            name: "silver",
+          },
+        ),
+      ).toBeChecked();
+
+      expect(
+        screen.getByRole(
+          "checkbox",
+          {
+            name: "gold",
+          },
+        ),
+      ).toBeChecked();
+
+      expect(
+        screen.getByRole(
+          "checkbox",
+          {
+            name: "raw",
+          },
+        ),
+      ).not.toBeChecked();
+    },
+  );
+  it(
+    "shows an empty state when no tags match the search",
+    async () => {
+      const bridge =
+        new MockBridge(taggedGraph);
+
+      render(
+        <App bridge={bridge} />,
+      );
+
+      await screen.findByText(
+        "5 nodes",
+      );
+
+      const summary =
+        screen
+          .getByText("Tags")
+          .closest("summary");
+
+      expect(summary).not.toBeNull();
+
+      await userEvent.click(summary!);
+
+      await userEvent.type(
+        screen.getByPlaceholderText(
+          "Search tags...",
+        ),
+        "does-not-exist",
+      );
+
+      expect(
+        screen.getByText(
+          "No matching tags",
+        ),
+      ).toBeInTheDocument();
+    },
+  );
+  it(
+    "navigates to a node from search",
+    async () => {
+      const bridge =
+        new MockBridge(graph);
+
+      render(
+        <App bridge={bridge} />,
+      );
+
+      await screen.findByText(
+        "2 nodes",
+      );
+
+      const search =
+        screen.getByRole(
+          "searchbox",
+          {
+            name: "Search nodes",
+          },
+        );
+
+      await userEvent.type(
+        search,
+        "mid",
+      );
+
+      const result =
+        screen.getByRole(
+          "option",
+          {
+            name: "mid",
+          },
+        );
+
+      await userEvent.click(
+        result,
+      );
+
+      expect(
+        screen.getByText(
+          "a middle node",
+        ),
+      ).toBeInTheDocument();
+
+      expect(
+        screen.getByTestId(
+          "canvas-focus",
+        ),
+      ).toHaveTextContent(
+        "mid",
+      );
+    },
+  );
+  it(
+    "shows matching nodes only",
+    async () => {
+      const bridge =
+        new MockBridge(graph);
+
+      render(
+        <App bridge={bridge} />,
+      );
+
+      await screen.findByText(
+        "2 nodes",
+      );
+
+      await userEvent.type(
+        screen.getByRole(
+          "searchbox",
+          {
+            name: "Search nodes",
+          },
+        ),
+        "mi",
+      );
+
+      expect(
+        screen.getByRole(
+          "option",
+          {
+            name: "mid",
+          },
+        ),
+      ).toBeInTheDocument();
+
+      expect(
+        screen.queryByRole(
+          "option",
+          {
+            name: "src",
+          },
+        ),
+      ).not.toBeInTheDocument();
+    },
+  );
+  it(
+    "shows graph diagnostics",
+    async () => {
+      render(
+        <App
+          bridge={
+            new MockBridge(
+              graphWithIssues,
+            )
+          }
+        />,
+      );
+
+      const issues =
+        await screen.findByText(
+          "1 issue",
+        );
+
+      await userEvent.click(
+        issues,
+      );
+
+      expect(
+        screen.getByText(
+          "Unresolved dependency:",
+        ),
+      ).toBeInTheDocument();
+
+      expect(
+        screen.getByText(
+          "raw_orders",
+        ),
+      ).toBeInTheDocument();
+
+      expect(
+        screen.getByText(
+          "def/silver_orders.sqlx",
+        ),
+      ).toBeInTheDocument();
+    },
+  );
+  it(
+    "hides diagnostics when the graph has no issues",
+    async () => {
+      render(
+        <App
+          bridge={
+            new MockBridge(graph)
+          }
+        />,
+      );
+
+      await screen.findByText(
+        "2 nodes",
+      );
+
+      expect(
+        screen.queryByText(
+          /issues?$/,
+        ),
+      ).not.toBeInTheDocument();
+    },
+  );
 });

@@ -2,16 +2,57 @@ import type { SerializedGraph } from "@dataform-dag/core";
 
 export type { SerializedGraph };
 
+export type GraphMode =
+  | "parsed"
+  | "compiled";
+
 /** UI → host. Every payload carries a `type` discriminant; the protocol is host-independent. */
 export type OutboundMsg =
   | { type: "ready" }
   | { type: "openFile"; nodeId: string; filePath: string }
-  | { type: "requestRefresh" };
+  | { type: "showCompiledSql"; nodeId: string; filePath: string }
+  | { type: "requestRefresh" }
+  | {
+    type: "setTagFilter";
+    selectedTags: string[];
+  }
+  | {
+    type: "setGraphMode";
+    mode: GraphMode;
+  };
+
+export type CompilationStatus =
+  | "idle"
+  | "compiling"
+  | "ready"
+  | "error";
 
 /** host → UI. */
 export type InboundMsg =
   | { type: "graphUpdate"; graph: SerializedGraph }
-  | { type: "focusNode"; nodeId: string };
+  | { type: "focusNode"; nodeId: string }
+  | {
+    type: "compilationStatus";
+    status: CompilationStatus;
+  }
+  | {
+    type: "compiledSqlResult";
+    nodeId: string;
+    sql: string;
+  }
+  | {
+    type: "compiledSqlError";
+    nodeId: string;
+    message: string;
+  }
+  | {
+    type: "tagFilterState";
+    selectedTags: string[];
+  }
+  | {
+    type: "graphModeState";
+    mode: GraphMode;
+  };
 
 /**
  * What a host can do. The UI reads these to decide what to render — a "Go to file" button only
@@ -20,6 +61,8 @@ export type InboundMsg =
  */
 export interface HostCapabilities {
   openFile: boolean;
+  compiledSql: boolean;
+  compiledGraph: boolean;
   liveWatch: boolean;
   focusOnActive: boolean;
 }
