@@ -86,6 +86,35 @@ const taggedGraph: SerializedGraph = {
   downstream: [],
 };
 
+const graphWithIssues:
+  SerializedGraph = {
+  nodes: [
+    {
+      id: "silver_orders",
+      filePath:
+        "def/silver_orders.sqlx",
+      type: "table",
+      tags: ["silver"],
+      refs: ["raw_orders"],
+    },
+  ],
+
+  downstream: [],
+
+  issues: [
+    {
+      kind:
+        "unresolved-reference",
+      nodeId:
+        "silver_orders",
+      filePath:
+        "def/silver_orders.sqlx",
+      reference:
+        "raw_orders",
+    },
+  ],
+};
+
 describe("App", () => {
   it("requests the graph on mount and renders the node count", async () => {
     const bridge = new MockBridge(graph);
@@ -652,6 +681,69 @@ describe("App", () => {
           {
             name: "src",
           },
+        ),
+      ).not.toBeInTheDocument();
+    },
+  );
+  it(
+    "shows graph diagnostics",
+    async () => {
+      render(
+        <App
+          bridge={
+            new MockBridge(
+              graphWithIssues,
+            )
+          }
+        />,
+      );
+
+      const issues =
+        await screen.findByText(
+          "1 issue",
+        );
+
+      await userEvent.click(
+        issues,
+      );
+
+      expect(
+        screen.getByText(
+          "Unresolved dependency:",
+        ),
+      ).toBeInTheDocument();
+
+      expect(
+        screen.getByText(
+          "raw_orders",
+        ),
+      ).toBeInTheDocument();
+
+      expect(
+        screen.getByText(
+          "def/silver_orders.sqlx",
+        ),
+      ).toBeInTheDocument();
+    },
+  );
+  it(
+    "hides diagnostics when the graph has no issues",
+    async () => {
+      render(
+        <App
+          bridge={
+            new MockBridge(graph)
+          }
+        />,
+      );
+
+      await screen.findByText(
+        "2 nodes",
+      );
+
+      expect(
+        screen.queryByText(
+          /issues?$/,
         ),
       ).not.toBeInTheDocument();
     },

@@ -3,6 +3,7 @@ export type {
   DataformNode,
   DataformGraph,
   SerializedGraph,
+  GraphIssue,
 } from "./types.js";
 export { parseSqlx, extractRefs, extractConfigBlock, basename } from "./parser.js";
 export {

@@ -17,6 +17,9 @@ import { NodeDetailPanel } from "./NodeDetailPanel.js";
 import "./app.css";
 import { TagFilter } from "./TagFilter.js";
 import { NodeSearch } from "./NodeSearch.js";
+import {
+  GraphDiagnostics,
+} from "./GraphDiagnostics.js";
 
 export interface AppProps {
   bridge: HostBridge;
@@ -114,6 +117,8 @@ export function App({ bridge }: AppProps): JSX.Element {
   const boundaryNodeIds =
     tagFilteredView?.boundaryNodeIds;
 
+  const graphIssues = graph?.issues ?? [];
+
   const visibleNodeIds = useMemo(
     () =>
       filteredGraph
@@ -136,6 +141,33 @@ export function App({ bridge }: AppProps): JSX.Element {
           (current?.nonce ?? 0) + 1,
       }),
     );
+  };
+
+  const navigateToIssueNode = (
+    nodeId: string,
+  ): void => {
+    /*
+     * Diagnostics belong to the full graph.
+     *
+     * If a tag filter is hiding the affected node,
+     * clear it before navigating.
+     */
+    if (
+      selectedTags.length > 0
+    ) {
+      setSelectedTags([]);
+
+      setShowBoundaryDependencies(
+        false,
+      );
+
+      bridge.send({
+        type: "setTagFilter",
+        selectedTags: [],
+      });
+    }
+
+    navigateToNode(nodeId);
   };
 
   useEffect(() => {
@@ -214,6 +246,7 @@ export function App({ bridge }: AppProps): JSX.Element {
   const selected: DataformNode | null =
     (index && selectedId && index.byId.get(selectedId)) || null;
 
+
   return (
     <div className="ddag-app">
       <header className="ddag-topbar">
@@ -286,6 +319,22 @@ export function App({ bridge }: AppProps): JSX.Element {
           </label>
         )}
 
+        {filteredGraph &&
+          filteredGraph.nodes.length > 0 && (
+            <NodeSearch
+              nodeIds={visibleNodeIds}
+              onSelect={navigateToNode}
+            />
+          )}
+
+        <GraphDiagnostics
+          issues={graphIssues}
+          graphMode={graphMode}
+          onSelectNode={
+            navigateToIssueNode
+          }
+        />
+
         <div className="ddag-topbar__spacer" />
 
         {graph && filteredGraph && (
@@ -310,13 +359,6 @@ export function App({ bridge }: AppProps): JSX.Element {
           </span>
         )}
 
-        {filteredGraph &&
-          filteredGraph.nodes.length > 0 && (
-            <NodeSearch
-              nodeIds={visibleNodeIds}
-              onSelect={navigateToNode}
-            />
-          )}
 
         {!capabilities.liveWatch && (
           <button

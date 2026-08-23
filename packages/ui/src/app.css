@@ -941,3 +941,139 @@ body,
 .ddag-node.is-boundary.is-selected .ddag-node__type {
   opacity: 1;
 }
+
+.ddag-diagnostics {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.ddag-diagnostics__summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+
+  height: 30px;
+  box-sizing: border-box;
+
+  padding: 4px 9px;
+
+  border: 1px solid var(--vscode-inputValidation-warningBorder,
+      #cca700);
+
+  border-radius: 5px;
+
+  color: var(--vscode-editorWarning-foreground,
+      #cca700);
+
+  font-size: 12px;
+  font-weight: 600;
+
+  cursor: pointer;
+
+  list-style: none;
+}
+
+.ddag-diagnostics__summary::-webkit-details-marker {
+  display: none;
+}
+
+.ddag-diagnostics__menu {
+  position: absolute;
+
+  top: calc(100% + 6px);
+  right: 0;
+
+  z-index: 150;
+
+  width: 360px;
+  max-height: 420px;
+
+  overflow-y: auto;
+
+  box-sizing: border-box;
+
+  border: 1px solid var(--vscode-dropdown-border,
+      #d1d5db);
+
+  border-radius: 6px;
+
+  background: var(--vscode-dropdown-background,
+      #ffffff);
+
+  color: var(--vscode-dropdown-foreground,
+      #111827);
+
+  box-shadow:
+    0 6px 20px rgba(0, 0, 0, 0.2);
+}
+
+.ddag-diagnostics__note {
+  padding: 9px 10px;
+
+  border-bottom: 1px solid var(--vscode-panel-border,
+      #e5e7eb);
+
+  color: var(--vscode-descriptionForeground,
+      #6b7280);
+
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.ddag-diagnostics__item {
+  padding: 9px 10px;
+
+  border-bottom: 1px solid var(--vscode-panel-border,
+      #e5e7eb);
+}
+
+.ddag-diagnostics__item:last-child {
+  border-bottom: 0;
+}
+
+.ddag-diagnostics__node {
+  padding: 0;
+
+  border: 0;
+  background: transparent;
+
+  color: var(--vscode-textLink-foreground,
+      #2563eb);
+
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+
+  cursor: pointer;
+}
+
+.ddag-diagnostics__node:hover {
+  text-decoration: underline;
+}
+
+.ddag-diagnostics__message {
+  margin-top: 3px;
+
+  font-size: 12px;
+}
+
+.ddag-diagnostics__message code {
+  font-family: var(--vscode-editor-font-family,
+      monospace);
+
+  color: var(--vscode-editorWarning-foreground,
+      #cca700);
+}
+
+.ddag-diagnostics__path,
+.ddag-diagnostics__paths {
+  margin-top: 3px;
+
+  color: var(--vscode-descriptionForeground,
+      #6b7280);
+
+  font-family: var(--vscode-editor-font-family,
+      monospace);
+
+  font-size: 10px;
+}

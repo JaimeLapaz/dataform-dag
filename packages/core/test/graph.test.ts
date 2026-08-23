@@ -27,11 +27,81 @@ describe("buildGraph", () => {
     expect(g.downstreamMap.get("c")).toBeUndefined();
   });
 
-  it("keeps a dangling ref without inventing a phantom node", () => {
-    const g = buildGraph([node("x", ["missing"])]);
-    expect(g.nodes.has("missing")).toBe(false);
-    expect(getAncestors(g, "x").size).toBe(0); // traversal skips absent targets
-  });
+  it(
+    "reports a dangling ref without inventing a phantom node",
+    () => {
+      const g =
+        buildGraph([
+          node(
+            "x",
+            ["missing"],
+          ),
+        ]);
+
+      expect(
+        g.nodes.has("missing"),
+      ).toBe(false);
+
+      expect(
+        getAncestors(
+          g,
+          "x",
+        ).size,
+      ).toBe(0);
+
+      expect(
+        g.issues,
+      ).toContainEqual({
+        kind:
+          "unresolved-reference",
+        nodeId: "x",
+        filePath: "x.sqlx",
+        reference: "missing",
+      });
+    },
+  );
+  it(
+    "reports duplicate node ids",
+    () => {
+      const first: DataformNode = {
+        ...node("customers"),
+        filePath:
+          "definitions/a.sqlx",
+      };
+
+      const second:
+        DataformNode = {
+        ...node("customers"),
+        filePath:
+          "definitions/b.sqlx",
+      };
+
+      const g =
+        buildGraph([
+          first,
+          second,
+        ]);
+
+      expect(
+        g.nodes.size,
+      ).toBe(1);
+
+      expect(
+        g.issues,
+      ).toContainEqual({
+        kind:
+          "duplicate-node-id",
+
+        nodeId:
+          "customers",
+
+        filePaths: [
+          "definitions/a.sqlx",
+          "definitions/b.sqlx",
+        ],
+      });
+    },
+  );
 
   it("connects operations using explicit dependencies and config.name", () => {
     const prepare = parseSqlx(
@@ -96,5 +166,10 @@ describe("serialize round-trip", () => {
     const back = deserializeGraph(serializeGraph(g));
     expect([...back.nodes.keys()].sort()).toEqual([...g.nodes.keys()].sort());
     expect([...(back.downstreamMap.get("b") ?? [])].sort()).toEqual(["c", "d"]);
+    expect(
+      back.issues,
+    ).toEqual(
+      g.issues,
+    );
   });
 });

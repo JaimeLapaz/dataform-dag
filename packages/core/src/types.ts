@@ -26,17 +26,40 @@ export interface DataformNode {
   description?: string;
 }
 
+export type GraphIssue =
+  | {
+    kind: "unresolved-reference";
+    nodeId: string;
+    filePath: string;
+    reference: string;
+  }
+  | {
+    kind: "duplicate-node-id";
+    nodeId: string;
+    filePaths: string[];
+  };
+
 /**
  * An immutable dependency graph. `downstreamMap` is derived once at build time: it inverts each
  * node's `refs` so descendant traversal is O(edges) instead of a full rescan.
  */
 export interface DataformGraph {
   nodes: Map<string, DataformNode>;
-  downstreamMap: Map<string, Set<string>>;
+  downstreamMap: Map<
+    string,
+    Set<string>
+  >;
+
+  issues?: GraphIssue[];
 }
 
 /** Wire form of {@link DataformGraph} — Maps/Sets flattened so it survives JSON / postMessage. */
 export interface SerializedGraph {
   nodes: DataformNode[];
-  downstream: Array<[string, string[]]>;
+
+  downstream: Array<
+    [string, string[]]
+  >;
+
+  issues?: GraphIssue[];
 }
