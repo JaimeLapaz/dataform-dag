@@ -22,3 +22,4 @@ Initial Marketplace release.
 - Graph diagnostics for unresolved dependencies and duplicate IDs.
 - VS Code light and dark theme integration.
 - Live graph updates.
+- Activity Bar entry with quick access to the graph.

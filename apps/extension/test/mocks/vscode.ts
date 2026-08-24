@@ -114,6 +114,7 @@ interface Records {
   warnings: string[];
   errors: string[];
   shownDocs: Array<{ uri: MockUri; opts: unknown }>;
+  treeDataProviders: Array<{ viewId: string; provider: unknown }>;
 }
 
 export const records: Records = {
@@ -124,6 +125,7 @@ export const records: Records = {
   warnings: [],
   errors: [],
   shownDocs: [],
+  treeDataProviders: [],
 };
 
 /** Convenience accessors for the most-recently created objects. */
@@ -182,11 +184,27 @@ export function resetMock(): void {
   records.warnings.length = 0;
   records.errors.length = 0;
   records.shownDocs.length = 0;
+  records.treeDataProviders.length = 0;
   workspace.workspaceFolders = undefined;
   vi.clearAllMocks();
 }
 
 export const window = {
+  registerTreeDataProvider: vi.fn(
+    (
+      viewId: string,
+      provider: unknown,
+    ) => {
+      records.treeDataProviders.push({
+        viewId,
+        provider,
+      });
+
+      return {
+        dispose: vi.fn(),
+      };
+    },
+  ),
   createWebviewPanel: vi.fn((_id: string, _title: string, _col: number, _opts: unknown) => {
     const panel = new MockPanel();
     records.panels.push(panel);
