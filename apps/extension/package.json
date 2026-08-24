@@ -61,6 +61,31 @@
         "title": "Show Compiled SQL",
         "category": "Dataform DAG Explorer"
       }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "dataformDagExplorer",
+          "title": "Dataform DAG Explorer",
+          "icon": "media/dag.svg"
+        }
+      ]
+    },
+    "views": {
+      "dataformDagExplorer": [
+        {
+          "id": "dataformDagExplorer.home",
+          "name": "Overview",
+          "icon": "media/dag.svg",
+          "contextualTitle": "Dataform DAG Explorer"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "dataformDagExplorer.home",
+        "contents": "Explore the current Dataform project dependency graph.\n[Open Graph](command:dataformDagExplorer.showGraph)\n\nOpen a `.sqlx` file and [show its compiled SQL](command:dataformDagExplorer.showCompiledSql)."
+      }
     ]
   },
   "scripts": {

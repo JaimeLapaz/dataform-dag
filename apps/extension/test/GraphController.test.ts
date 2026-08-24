@@ -202,22 +202,40 @@ afterEach(() => {
 });
 
 describe("activate", () => {
-  it("registers the commands and pushes disposables", () => {
-    const context = activateAndShow();
+  it(
+    "registers the commands, activity view and pushes disposables",
+    () => {
+      const context =
+        activateAndShow();
 
-    expect(commands.registerCommand).toHaveBeenCalledWith(
-      "dataformDagExplorer.showGraph",
-      expect.any(Function),
-    );
+      expect(
+        commands.registerCommand,
+      ).toHaveBeenCalledWith(
+        "dataformDagExplorer.showGraph",
+        expect.any(Function),
+      );
 
-    expect(commands.registerCommand).toHaveBeenCalledWith(
-      "dataformDagExplorer.showCompiledSql",
-      expect.any(Function),
-    );
+      expect(
+        commands.registerCommand,
+      ).toHaveBeenCalledWith(
+        "dataformDagExplorer.showCompiledSql",
+        expect.any(Function),
+      );
 
-    // showGraph + showCompiledSql + controller
-    expect(context.subscriptions).toHaveLength(3);
-  });
+      expect(
+        window.registerTreeDataProvider,
+      ).toHaveBeenCalledWith(
+        "dataformDagExplorer.home",
+        expect.any(Object),
+      );
+
+      // activity view + showGraph +
+      // showCompiledSql + controller
+      expect(
+        context.subscriptions,
+      ).toHaveLength(4);
+    },
+  );
 });
 
 describe("show", () => {

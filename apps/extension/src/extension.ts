@@ -38,9 +38,43 @@ const WEBVIEW_TYPE =
 const TAG_FILTER_STATE_KEY =
   "dataformDagExplorer.selectedTags";
 
-export function activate(context: vscode.ExtensionContext): void {
-  const controller = new GraphController(context);
+const ACTIVITY_VIEW_ID =
+  "dataformDagExplorer.home";
+
+class EmptyActivityViewProvider
+  implements vscode.TreeDataProvider<
+    vscode.TreeItem
+  > {
+  getTreeItem(
+    element: vscode.TreeItem,
+  ): vscode.TreeItem {
+    return element;
+  }
+
+  getChildren():
+    vscode.ProviderResult<
+      vscode.TreeItem[]
+    > {
+    return [];
+  }
+}
+
+
+export function activate(
+  context: vscode.ExtensionContext,
+): void {
+  const controller =
+    new GraphController(context);
+
+  const activityViewProvider =
+    new EmptyActivityViewProvider();
+
   context.subscriptions.push(
+    vscode.window.registerTreeDataProvider(
+      ACTIVITY_VIEW_ID,
+      activityViewProvider,
+    ),
+
     vscode.commands.registerCommand(
       COMMAND_SHOW_GRAPH,
       () => controller.show(),
@@ -48,7 +82,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
     vscode.commands.registerCommand(
       COMMAND_SHOW_COMPILED_SQL,
-      () => controller.showCompiledSql(),
+      () =>
+        controller.showCompiledSql(),
     ),
 
     controller,
